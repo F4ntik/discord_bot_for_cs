@@ -46,6 +46,8 @@ rsync -a --delete \
   --exclude '.git' \
   --exclude 'config.py' \
   --exclude 'amxmodx_plugin' \
+  --exclude 'PROJECT_LOG.md' \
+  --exclude 'AGENTS.md' \
   "$TMP_DIR/repo"/ "$PROJECT_DIR"/
 
 echo "[updater] Подготовка виртуального окружения"
