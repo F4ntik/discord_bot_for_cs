@@ -12,6 +12,14 @@ ws: WebServer = WebServer(host=config.WEB_HOST_ADDRESS,
                           port=config.WEB_SERVER_PORT,
                           allowed_ips=config.WEB_ALLOWED_IPS)
 
+# -- Team labels
+TEAM_DEFAULT_LABEL = "SPEC"
+TEAM_LABELS = {
+  1: "T",
+  2: "CT",
+  3: TEAM_DEFAULT_LABEL,
+}
+
 # -- Events
 @observer.subscribe(Event.BE_READY)
 async def run_ws():
@@ -93,6 +101,15 @@ async def handle_message(data: dict):
   cs_message = data['message']
   nick = data['nick']
   team = data['team']
+  team_number = None
+  if isinstance(team, int):
+    team_number = team
+  else:
+    try:
+      team_number = int(team)
+    except (TypeError, ValueError):
+      team_number = None
+  team_for_formatting = team_number if team_number is not None else team
   channel_prefix = data.get('channel', '')
   steam_id = data.get('steam_id', '')
 
@@ -127,12 +144,13 @@ async def handle_message(data: dict):
     logger.error(f"Таймаут при получении Discord ID для Steam ID {steam_id}")
     # Даже при таймауте пытаемся отправить осмысленное сообщение
     if team is not None:
-      prefix = f"({team.upper() if team else 'SPEC'}) "
+      label = TEAM_LABELS.get(team_number, TEAM_DEFAULT_LABEL)
+      prefix = f"({label}) "
   except Exception as e:
     logger.error(f"Ошибка при получении данных пользователя: {e}")
   
   # Отправляем сообщение в любом случае, даже если не смогли получить префикс
-  formatted_message = format_message(nick, cs_message, team, prefix + channel_prefix)
+  formatted_message = format_message(nick, cs_message, team_for_formatting, prefix + channel_prefix)
   
   await observer.notify(Event.WBH_MESSAGE, {
     "message": formatted_message
