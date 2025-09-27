@@ -175,11 +175,36 @@ async def cmd_map_change(interaction: discord.Interaction, map: str):
     "map": map
   })
 
+@bot.tree.command(name="map_install", description="Устанавливает карту из вложения")
+@discord.app_commands.describe(
+  file="Файл карты (.bsp или .zip)",
+  map_name="Имя карты без расширения",
+  min_players="Минимальное количество игроков",
+  max_players="Максимальное количество игроков"
+)
+@commands.has_permissions(manage_messages=True)
+async def cmd_map_install(
+  interaction: discord.Interaction,
+  file: discord.Attachment,
+  map_name: str | None = None,
+  min_players: int | None = None,
+  max_players: int | None = None,
+):
+  await interaction.response.defer(thinking=True, ephemeral=True)
+
+  await observer.notify(Event.BC_CS_MAP_INSTALL, {
+    Param.Interaction: interaction,
+    "file": file,
+    "map_name": map_name,
+    "min_players": min_players,
+    "max_players": max_players,
+  })
+
 # -- /map_add
 @bot.tree.command(name="map_add", description="Добавляет карту в БД")
-@discord.app_commands.describe(map_name="Название карты", 
-                               activated="Активна ли карта(в маппуле)", 
-                               min_players="Минимум игроков", 
+@discord.app_commands.describe(map_name="Название карты",
+                               activated="Активна ли карта(в маппуле)",
+                               min_players="Минимум игроков",
                                max_players="Максимум игроков", 
                                priority="Приоритет")
 @commands.has_permissions(manage_messages=True) 
