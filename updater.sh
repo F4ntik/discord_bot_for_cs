@@ -32,6 +32,7 @@ rsync -a --delete \
   --exclude 'backups' \
   --exclude '.git' \
   --exclude 'config.py' \
+  --exclude 'logs' \
   "$PROJECT_DIR"/ "$BACKUP_DIR"/
 
 echo "[updater] Загрузка репозитория $REPO_URL"
