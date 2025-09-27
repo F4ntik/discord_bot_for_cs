@@ -88,7 +88,14 @@ def is_bot(message: discord.Message):
 # -- send_status_message
 async def send_status_message(message: str, channel: discord.TextChannel):
   global cs_status_message
-  await channel.purge(limit=10)
+  try:
+    await channel.purge(limit=10)
+  except discord.Forbidden as err:
+    logger.error(f"Dbot: Нет прав для очистки сообщений перед отправкой статуса: {err}")
+  except discord.HTTPException as err:
+    logger.error(f"Dbot: Ошибка HTTP при очистке сообщений перед отправкой статуса: {err}")
+  except Exception as err:
+    logger.error(f"Dbot: Неизвестная ошибка при очистке сообщений перед отправкой статуса: {err}")
 
   cs_status_message = await channel.send(f"```ansi\n{message}```")
 
