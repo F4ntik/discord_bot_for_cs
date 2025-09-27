@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# --- Параметры/дефолты ---
 SERVICE_NAME="${SERVICE_NAME:-discord_bot.service}"
 SUDO_BIN="${SUDO_BIN:-sudo}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_ROOT="${BACKUP_ROOT:-"$PROJECT_DIR/backups"}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
-REPO_URL_DEFAULT="$(git -C "$PROJECT_DIR" config --get remote.origin.url 2>/dev/null || true)"
-REPO_URL="${REPO_URL:-$REPO_URL_DEFAULT}"
 
-if [[ -z "$REPO_URL" ]]; then
-  echo "Не удалось определить URL репозитория. Укажите его через переменную окружения REPO_URL." >&2
-  exit 1
-fi
+# Репозиторий по умолчанию (если REPO_URL не задан)
+REPO_URL="${REPO_URL:-https://github.com/F4ntik/discord_bot_for_cs}"
 
+# Python/venv
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+VENV="$PROJECT_DIR/venv"
+REQ="$PROJECT_DIR/requirements.txt"
+
+# --- Временная папка ---
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
@@ -43,6 +46,25 @@ rsync -a --delete \
   --exclude 'config.py' \
   --exclude 'amxmodx_plugin' \
   "$TMP_DIR/repo"/ "$PROJECT_DIR"/
+
+echo "[updater] Подготовка виртуального окружения"
+if [[ ! -d "$VENV" ]]; then
+  "$PYTHON_BIN" -m venv "$VENV"
+fi
+# shellcheck disable=SC1091
+source "$VENV/bin/activate"
+
+echo "[updater] Обновление pip/wheel"
+pip install --upgrade pip wheel
+
+if [[ -f "$REQ" ]]; then
+  echo "[updater] Установка зависимостей из $REQ"
+  pip install -r "$REQ"
+else
+  echo "[updater] Файл $REQ не найден, пропуск установки зависимостей"
+fi
+
+deactivate
 
 echo "[updater] Запуск сервиса $SERVICE_NAME"
 $SUDO_BIN systemctl start "$SERVICE_NAME"
