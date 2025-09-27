@@ -75,9 +75,22 @@ async def edit_status_message(message: str, channel: discord.TextChannel):
     cs_status_message = None
     await send_status_message(message, channel)
     return
+  except discord.HTTPException as err:
+    logger.error(f"Dbot: Ошибка HTTP при получении CS_STATUS в Discord: {err}")
+    cs_status_message = None
+    await send_status_message(message, channel)
+    return
 
   try:
     cs_status_message = await cs_status_message.edit(content=f"```ansi\n{message}```")
+  except discord.Forbidden as err:
+    logger.error(f"Dbot: Нет прав для обновления CS_STATUS в Discord: {err}")
+    cs_status_message = None
+    await send_status_message(message, channel)
+  except discord.HTTPException as err:
+    logger.error(f"Dbot: Ошибка HTTP при обновлении CS_STATUS в Discord: {err}")
+    cs_status_message = None
+    await send_status_message(message, channel)
   except Exception as e:
     logger.error(f"Dbot: Ошибка при обновлении CS_STATUS в Discord: {e}")
 
