@@ -49,7 +49,14 @@ async def edit_message(message: str, channel: discord.TextChannel, skip_size_che
 
   # Проверка размера только если не указано пропустить
   if not skip_size_check and len(formatted_message) > cs_chat_max_chars:
-    send_message(formatted_message, channel)
+    content = formatted_message
+    prefix = "```ansi\n"
+    suffix = "```"
+
+    if content.startswith(prefix) and content.endswith(suffix):
+      content = content[len(prefix):-len(suffix)]
+
+    await send_message(content, channel)
     return
   
   try:
