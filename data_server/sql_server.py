@@ -226,7 +226,7 @@ async def ev_unreg(data):
   user_id = str(interaction.user.id)
 
   query = "DELETE FROM users WHERE discord_id = %s"
-  query_values = (user_id)
+  query_values = (user_id,)
 
   try:
     rows = await mysql.execute_change(query, query_values)
@@ -281,7 +281,7 @@ async def ev_map_delete(data):
 
   # Удаляем из БД
   query = "DELETE FROM maps WHERE map_name = %s"
-  query_values = (data['map_name'])
+  query_values = (data['map_name'],)
 
   try:
     rows = await mysql.execute_change(query, query_values)
