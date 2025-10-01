@@ -6,7 +6,7 @@ from observer.observer_client import observer, logger, Event, Param
 from bot.bot_server import dbot
 import bot.cmd_autocomplete as auto
 
-import bot.utilities
+from bot import utilities as bot_utilities
 
 COMMAND_REFERENCE_URL = "https://github.com/F4ntik/discord_bot_for_cs/blob/main/docs/COMMANDS_REFERENCE_RU.md"
 
