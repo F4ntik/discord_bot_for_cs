@@ -81,6 +81,7 @@ async def cmd_connect_to_cs(data):
   try:
     await cs_server.connect_to_server()
     logger.info(f"CS Server: Успешно подключен")
+    await observer.notify(Event.CS_CONNECTED)
     await interaction.followup.send(content="Успешно подключено!", ephemeral=True)
   except CSConnectionError as err:
     logger.error(f"CS Server: {err}")
