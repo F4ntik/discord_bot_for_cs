@@ -17,8 +17,8 @@ import cs_server.map_installer
 
 app_info = {
   'name': 'Ultra disBot',
-  'version': '0.3.1a',
-  'author': 'Asura',
+  'version': '0.4.0',
+  'author': 'Asura, Mep3ocTb',
   'description': 'Bot for connecting discord and cs server'
 }
 
@@ -26,5 +26,6 @@ if __name__ == "__main__":
   logger.info("==================================")
   logger.info(f"=== {app_info['name']} {app_info['version']}v by {app_info['author']} ===")
   logger.info("==================================")
+
 
   dbot.run()
