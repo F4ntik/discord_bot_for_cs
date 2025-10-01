@@ -13,6 +13,7 @@ import data_server.redis_server
 import data_server.sql_server
 
 import cs_server.cs_server
+import cs_server.map_installer
 
 app_info = {
   'name': 'Ultra disBot',
