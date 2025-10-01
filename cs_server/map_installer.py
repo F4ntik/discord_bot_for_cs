@@ -62,9 +62,7 @@ async def install_map_from_attachment(data: dict) -> None:
     return
 
   logger.info(
-    "Map installer: файл %s сохранён, параметры записаны в %s",
-    file_path.name,
-    meta_path.name,
+    f"Map installer: файл {file_path.name} сохранён, параметры записаны в {meta_path.name}"
   )
 
   await interaction.followup.send(
