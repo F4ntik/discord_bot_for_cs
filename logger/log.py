@@ -1,6 +1,7 @@
+import datetime
 import logging
 import traceback
-import datetime
+from pathlib import Path
 
 # SECTION class Log
 class Log:
@@ -22,7 +23,10 @@ class Log:
     self.info_logger.addHandler(console_handler_info)
 
     # Создаем обработчик для записи логов в файл
-    file_handler_info = logging.FileHandler(f"logs/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_application.log", encoding='utf-8')
+    log_dir = Path(__file__).resolve().parent.parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_application.log"
+    file_handler_info = logging.FileHandler(log_file, encoding='utf-8')
     file_handler_info.setFormatter(formatter_info)
     self.info_logger.addHandler(file_handler_info)
 
