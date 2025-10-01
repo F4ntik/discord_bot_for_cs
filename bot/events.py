@@ -8,6 +8,7 @@ import asyncio
 from bot.bot_server import dbot
 
 import config
+from bot import utilities as bot_utilities
 
 bot = dbot.bot
 
@@ -31,9 +32,10 @@ async def on_ready():
         )
 
     if admin_channel is not None:
+      help_mention = bot_utilities.get_command_mention("help")
       startup_message = (
         f"✅ {bot.user.name} запущен и готов к работе!\n"
-        "Используйте `/help`, чтобы узнать обо всех доступных командах и возможностях."
+        f"Используйте {help_mention}, чтобы узнать обо всех доступных командах и возможностях."
       )
 
       try:
