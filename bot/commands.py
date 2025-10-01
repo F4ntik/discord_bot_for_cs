@@ -51,7 +51,7 @@ async def cmd_help(interaction: discord.Interaction):
     help_lines.append(f"__{title}__")
     for command_name, usage_suffix, description, is_test in commands_info:
       suffix = "" if not is_test else " — тестовый режим"
-      mention = bot.utilities.get_command_mention(command_name)
+      mention = bot_utilities.get_command_mention(command_name)
       help_lines.append(f"• {mention}{usage_suffix} — {description}{suffix}")
 
   help_lines.append("")
