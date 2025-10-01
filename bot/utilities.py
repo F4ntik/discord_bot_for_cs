@@ -10,4 +10,8 @@ def get_command_mention(command_name: str) -> str:
   if command is None:
     return f"/{command_name}"
 
-  return command.mention
+  mention = getattr(command, "mention", None)
+  if mention is None:
+    return f"/{command_name}"
+
+  return mention
