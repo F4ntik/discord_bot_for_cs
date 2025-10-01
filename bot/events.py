@@ -15,7 +15,36 @@ bot = dbot.bot
 @bot.event
 async def on_ready():
   logger.info(f"DBot {bot.user.name} запущен")
-  
+
+  admin_channel_id = getattr(config, "ADMIN_CHANNEL_ID", None)
+  if admin_channel_id:
+    admin_channel = bot.get_channel(admin_channel_id)
+
+    if admin_channel is None:
+      try:
+        admin_channel = await bot.fetch_channel(admin_channel_id)
+      except (discord.NotFound, discord.Forbidden, discord.HTTPException) as fetch_error:
+        logger.warning(
+          "Не удалось получить админский канал %s для уведомления о запуске: %s",
+          admin_channel_id,
+          fetch_error,
+        )
+
+    if admin_channel is not None:
+      startup_message = (
+        f"✅ {bot.user.name} запущен и готов к работе!\n"
+        "Используйте `/help`, чтобы узнать обо всех доступных командах и возможностях."
+      )
+
+      try:
+        await admin_channel.send(startup_message)
+      except (discord.Forbidden, discord.HTTPException) as send_error:
+        logger.warning(
+          "Не удалось отправить сообщение о запуске в канал %s: %s",
+          admin_channel_id,
+          send_error,
+        )
+
   await observer.notify(Event.BE_READY)
 
 # -- on_message

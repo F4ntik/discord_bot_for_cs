@@ -6,3 +6,4 @@
 - Полный справочник команд с примерами: [docs/COMMANDS_REFERENCE_RU.md](docs/COMMANDS_REFERENCE_RU.md)
 - Краткий журнал работ: [PROJECT_LOG.md](PROJECT_LOG.md)
 - Скрипты обслуживания: `updater.sh` (обновление) и `restore.sh` (восстановление)
+- При запуске бот отправляет уведомление в администраторский канал (ID задаётся в `config.py`).
