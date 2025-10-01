@@ -8,11 +8,55 @@ import bot.cmd_autocomplete as auto
 
 import bot.utilities
 
+COMMAND_REFERENCE_URL = "https://github.com/F4ntik/discord_bot_for_cs/blob/main/docs/COMMANDS_REFERENCE_RU.md"
+
 bot = dbot.bot
 
 #-------------------------------------------------------
 # SECTION Bot for-all commands
 #-------------------------------------------------------
+
+# -- /help
+@bot.tree.command(name="help", description="Показывает информацию по доступным командам")
+async def cmd_help(interaction: discord.Interaction):
+  sections = [
+    ("Общие команды", [
+      ("/help", "Показывает информацию по доступным командам.", False),
+      ("/reg <steam_id>", "Регистрация пользователя с указанием Steam ID.", False),
+      ("/unreg", "Удаляет данные пользователя по Discord ID.", False),
+    ]),
+    ("Команды модерации Discord", [
+      ("/clear <amount>", "Удаляет указанное количество сообщений в текущем канале (нужны права manage_messages).", False),
+    ]),
+    ("Команды администрирования CS 1.6", [
+      ("/connect_to_cs", "Подключается к игровому серверу (нужны права manage_messages).", False),
+      ("/rcon <command>", "Отправляет произвольную команду в консоль сервера (нужны права manage_messages).", False),
+      ("/kick <target> [reason]", "Кикает игрока с сервера (нужны права manage_messages).", False),
+      ("/ban <target> <minutes> [reason]", "Блокирует игрока на сервере на заданное время (нужны права manage_messages).", False),
+      ("/ban_offline <steam_id> <minutes> [reason]", "Блокирует игрока, который ранее был на сервере (нужны права manage_messages).", False),
+      ("/unban <steam_id>", "Разблокирует игрока по Steam ID (нужны права manage_messages).", False),
+      ("/sync_maps", "Синхронизирует список карт между MySQL, Redis и сервером (нужны права manage_messages).", False),
+      ("/map_change <map>", "Меняет текущую карту на сервере (нужны права manage_messages).", False),
+      ("/map_install <file> [map_name] [min_players] [max_players]", "Устанавливает карту из вложения и сохраняет параметры.", True),
+      ("/map_add <map_name> [activated] [min_players] [max_players] [priority]", "Добавляет карту в базу данных (нужны права manage_messages).", False),
+      ("/map_delete <map_name>", "Удаляет карту из базы данных (нужны права manage_messages).", False),
+      ("/map_update <map_name> [activated] [min_players] [max_players] [priority]", "Обновляет параметры карты в базе данных (нужны права manage_messages).", False),
+    ]),
+  ]
+
+  help_lines = ["**Доступные команды**"]
+
+  for title, commands_info in sections:
+    help_lines.append("")
+    help_lines.append(f"__{title}__")
+    for command_name, description, is_test in commands_info:
+      suffix = "" if not is_test else " — тестовый режим"
+      help_lines.append(f"• `{command_name}` — {description}{suffix}")
+
+  help_lines.append("")
+  help_lines.append(f"Подробнее о командах: {COMMAND_REFERENCE_URL}")
+
+  await interaction.response.send_message("\n".join(help_lines), ephemeral=True)
 
 # -- /reg
 @bot.tree.command(name="reg", description="Регистрация пользователя с указанием steam_id")
