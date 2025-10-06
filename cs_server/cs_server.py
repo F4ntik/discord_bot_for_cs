@@ -26,14 +26,14 @@ def require_connection(func) -> callable:
   return wrapper
 
 def escape_rcon_param(value) -> str:
-  """Экранирует кавычки и обратные слэши в аргументах RCON."""
+  """Подготавливает аргументы RCON, заменяя опасные символы."""
 
   if value is None:
     return ""
 
   text = str(value)
+  text = text.replace('"', "'")
   text = text.replace("\\", "\\\\")
-  text = text.replace("\"", "\\\"")
 
   return text
 
