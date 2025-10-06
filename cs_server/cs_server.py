@@ -13,7 +13,7 @@ cs_server: CSRCON = CSRCON(host=config.CS_HOST,
 
 # -- @require_connection
 def require_connection(func) -> callable:
-  
+
   async def wrapper(*args, **kwargs) -> callable:
     if cs_server.connected:
       return await func(*args, **kwargs)
@@ -22,8 +22,20 @@ def require_connection(func) -> callable:
       await kwargs['data'][Param.Interaction].followup.send('Нет подключения к серверу', ephemeral=True)
     
     logger.error("CS Server: Нет связи с CS")
-  
+
   return wrapper
+
+def escape_rcon_param(value) -> str:
+  """Подготавливает аргументы RCON, заменяя опасные символы."""
+
+  if value is None:
+    return ""
+
+  text = str(value)
+  text = text.replace('"', "'")
+  text = text.replace("\\", "\\\\")
+
+  return text
 
 # !SECTION
 
@@ -59,8 +71,9 @@ async def connect():
 async def send_message(data):
   message: discord.Message = data[Param.Message]
 
-  send_msg = "\"" + message.author.display_name + "\"" + " " + "\"" + message.content + "\""
-  command = f"ultrahc_ds_send_msg {send_msg}"
+  author = escape_rcon_param(message.author.display_name)
+  content = escape_rcon_param(message.content)
+  command = f"ultrahc_ds_send_msg \"{author}\" \"{content}\""
 
   try:
     await cs_server.exec(command)
@@ -111,7 +124,9 @@ async def cmd_kick(data):
   target: str = data['target']
   reason: str = data['reason']
 
-  command = f"ultrahc_ds_kick_player \"{target}\" \"{reason}\""
+  safe_target = escape_rcon_param(target)
+  safe_reason = escape_rcon_param(reason)
+  command = f"ultrahc_ds_kick_player \"{safe_target}\" \"{safe_reason}\""
   
   try:
     await cs_server.exec(command)
@@ -134,7 +149,10 @@ async def cmd_ban(data):
   minutes: int = data['minutes']
   reason: str = data['reason']
 
-  command = f"amx_ban \"{target}\" \"{minutes}\" \"{reason}\""
+  safe_target = escape_rcon_param(target)
+  safe_minutes = escape_rcon_param(minutes)
+  safe_reason = escape_rcon_param(reason)
+  command = f"amx_ban \"{safe_target}\" \"{safe_minutes}\" \"{safe_reason}\""
   
   try:
     await cs_server.exec(command)
@@ -157,7 +175,10 @@ async def cmd_ban_offline(data):
   minutes: int = data['minutes']
   reason: str = data['reason']
 
-  command = f"amx_addban \"{target}\" \"{minutes}\" \"{reason}\""
+  safe_target = escape_rcon_param(target)
+  safe_minutes = escape_rcon_param(minutes)
+  safe_reason = escape_rcon_param(reason)
+  command = f"amx_addban \"{safe_target}\" \"{safe_minutes}\" \"{safe_reason}\""
   
   try:
     await cs_server.exec(command)
@@ -178,7 +199,8 @@ async def cmd_unban(data):
   caller_name: str = interaction.user.display_name
   target: str = data['target']
 
-  command = f"amx_unban \"{target}\""
+  safe_target = escape_rcon_param(target)
+  command = f"amx_unban \"{safe_target}\""
   
   try:
     await cs_server.exec(command)

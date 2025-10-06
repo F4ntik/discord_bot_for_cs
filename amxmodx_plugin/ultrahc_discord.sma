@@ -50,6 +50,12 @@ new Handle:__sql_handle;
 
 // new big_string[5000];
 
+stock Discord_UnescapeRconParam(str[], len)
+{
+	replace_string(str, len, "\\\\", "\\");
+	replace_string(str, len, "\\\"", "\"");
+}
+
 public plugin_init() {
 	register_plugin(PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
 	
@@ -366,11 +372,13 @@ public HookGetinfoCmd() {
 public HookKickPlayerCmd() {
 	new cmd_text[150];
 	read_args(cmd_text, charsmax(cmd_text));
-	
+
 	new player_to_kick[32];
 	new reason[128];
 	parse(cmd_text, player_to_kick, charsmax(player_to_kick), reason, charsmax(reason));
-	
+
+	Discord_UnescapeRconParam(player_to_kick, charsmax(player_to_kick));
+	Discord_UnescapeRconParam(reason, charsmax(reason));
 	server_cmd("amx_kick ^"%s^" ^"%s^"", player_to_kick, reason);
 }
 
@@ -383,7 +391,8 @@ public HookMsgFromDs() {
 	new author[64];
 	new msg[128];
 	parse(str, author, charsmax(author), msg, charsmax(msg));
-
+	Discord_UnescapeRconParam(author, charsmax(author));
+	Discord_UnescapeRconParam(msg, charsmax(msg));
 	client_print_color(0, print_team_blue, "%s ^3%s^1 : ^4%s", DISCORD_PREFIX, author, msg);
 }
 
