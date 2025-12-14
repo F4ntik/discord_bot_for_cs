@@ -1,2 +1,4 @@
 backups/
 uploaded_maps/
+__pycache__/
+*.py[cod]
