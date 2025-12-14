@@ -15,6 +15,32 @@ _cs_info_webhook_event: asyncio.Event = asyncio.Event()
 _cs_info_timeout_streak: int = 0
 _connect_guard_lock: asyncio.Lock = asyncio.Lock()
 _last_connect_attempt_at: float = 0.0
+_disconnect_notified: bool = False
+
+
+def _mark_connected() -> None:
+  """Сбрасываем флаг рассылки события отключения после успешного коннекта."""
+  global _disconnect_notified
+  _disconnect_notified = False
+
+
+async def _notify_cs_disconnected_once() -> None:
+  """Отправляет CS_DISCONNECTED максимум один раз до следующего подключения."""
+  global _disconnect_notified
+  if _disconnect_notified:
+    return
+  _disconnect_notified = True
+  await observer.notify(Event.CS_DISCONNECTED)
+
+
+def _validate_rcon_response(command: str, response: str) -> None:
+  """Проверяет ответ RCON на типовые ошибки и поднимает исключение."""
+  if not response:
+    return
+
+  lowered = str(response).lower()
+  if "unknown command" in lowered or "bad rcon_password" in lowered or "bad password" in lowered:
+    raise CommandExecutionError(f"Команда {command} вернула ошибку: {response}")
 
 @observer.subscribe(Event.WBH_INFO)
 async def _cs_info_webhook_received(data) -> None:
@@ -63,7 +89,8 @@ async def get_status():
   
   try:
     _cs_info_webhook_event.clear()
-    await cs_server.exec("ultrahc_ds_get_info")
+    response = await cs_server.exec("ultrahc_ds_get_info")
+    _validate_rcon_response("ultrahc_ds_get_info", response)
 
     timeout = getattr(config, "CS_INFO_WEBHOOK_TIMEOUT", 12)
     if timeout and timeout > 0:
@@ -81,7 +108,7 @@ async def get_status():
   except CommandExecutionError as err:
     logger.error(f"CS Server: {err}")
     await cs_server.disconnect()
-    await observer.notify(Event.CS_DISCONNECTED)
+    await _notify_cs_disconnected_once()
 
 # -- on_ready connect
 @observer.subscribe(Event.BE_READY)
@@ -103,11 +130,12 @@ async def connect():
     await cs_server.connect_to_server()
     logger.info(f"CS Server: Успешно подключен")
     
+    _mark_connected()
     await observer.notify(Event.CS_CONNECTED)
 
   except CSConnectionError as err:
     logger.error(f"CS Server: {err}")
-    await observer.notify(Event.CS_DISCONNECTED)
+    await _notify_cs_disconnected_once()
 
 @observer.subscribe(Event.BE_MESSAGE)
 @require_connection
@@ -117,14 +145,15 @@ async def send_message(data):
   author = escape_rcon_param(message.author.display_name)
   content = escape_rcon_param(message.content)
   command = f"ultrahc_ds_send_msg \"{author}\" \"{content}\""
-
+  
   try:
     logger.info(f"CS Server: отправка сообщения в CS от {author} (len={len(content)})")
-    await cs_server.exec(command)
+    response = await cs_server.exec(command)
+    _validate_rcon_response("ultrahc_ds_send_msg", response)
   except CommandExecutionError as err:
     logger.error(f"CS Server: {err}")
     await cs_server.disconnect()
-    await observer.notify(Event.CS_DISCONNECTED)
+    await _notify_cs_disconnected_once()
 
 
 
@@ -140,6 +169,7 @@ async def cmd_connect_to_cs(data):
   try:
     await cs_server.connect_to_server()
     logger.info(f"CS Server: Успешно подключен")
+    _mark_connected()
     await observer.notify(Event.CS_CONNECTED)
     await interaction.followup.send(content="Успешно подключено!", ephemeral=True)
   except CSConnectionError as err:
