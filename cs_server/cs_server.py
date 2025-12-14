@@ -2,12 +2,20 @@ from observer.observer_client import logger, observer, Event, Param, Color, nsro
 from cs_server.csrcon import CSRCON, ConnectionError as CSConnectionError, CommandExecutionError
 
 import discord
+import asyncio
 
 import config
 
 # -- init
 cs_server: CSRCON = CSRCON(host=config.CS_HOST,
                            password=config.CS_RCON_PASSWORD)
+
+_cs_info_webhook_event: asyncio.Event = asyncio.Event()
+
+@observer.subscribe(Event.WBH_INFO)
+async def _cs_info_webhook_received(data) -> None:
+  if not _cs_info_webhook_event.is_set():
+    _cs_info_webhook_event.set()
 
 # SECTION Utlities
 
@@ -47,7 +55,15 @@ async def get_status():
     return
   
   try:
+    _cs_info_webhook_event.clear()
     await cs_server.exec("ultrahc_ds_get_info")
+
+    timeout = getattr(config, "CS_INFO_WEBHOOK_TIMEOUT", 12)
+    if timeout and timeout > 0:
+      try:
+        await asyncio.wait_for(_cs_info_webhook_event.wait(), timeout=timeout)
+      except asyncio.TimeoutError:
+        raise CommandExecutionError(f"Таймаут ожидания webhook info ({timeout}с)")
   except CommandExecutionError as err:
     logger.error(f"CS Server: {err}")
     await cs_server.disconnect()
@@ -65,6 +81,7 @@ async def connect():
 
   except CSConnectionError as err:
     logger.error(f"CS Server: {err}")
+    await observer.notify(Event.CS_DISCONNECTED)
 
 @observer.subscribe(Event.BE_MESSAGE)
 @require_connection
@@ -79,6 +96,8 @@ async def send_message(data):
     await cs_server.exec(command)
   except CommandExecutionError as err:
     logger.error(f"CS Server: {err}")
+    await cs_server.disconnect()
+    await observer.notify(Event.CS_DISCONNECTED)
 
 
 
