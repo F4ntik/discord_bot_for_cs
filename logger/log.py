@@ -93,30 +93,31 @@ class Log:
       pass
 
   # -- info()
-  def info(self, message: str) -> None:
+  def info(self, message: str, *args, **kwargs) -> None:
     """
     Выводит информационное сообщение.
 
     :param message: Сообщение для вывода.
     """
-    self.info_logger.info(message)
+    self.info_logger.info(message, *args, **kwargs)
 
   # -- error()
-  def error(self, message: str) -> None:
+  def error(self, message: str, *args, **kwargs) -> None:
     """
     Выводит сообщение об ошибке.
 
     :param message: Сообщение об ошибке для вывода.
     """
-    self.error_logger.error(message)
+    self.error_logger.error(message, *args, **kwargs)
 
   # -- exception()
-  def exception(self, message: str) -> None:
+  def exception(self, message: str, *args, **kwargs) -> None:
     """
     Выводит сообщение об исключении с трассировкой.
 
     :param message: Сообщение об исключении для вывода.
     """
-    self.error_logger.error(f"{message}\n{traceback.format_exc()}")
+    # Используем стандартный механизм logging.exception, чтобы traceback логировался корректно.
+    self.error_logger.exception(message, *args, **kwargs)
 
 # !SECTION

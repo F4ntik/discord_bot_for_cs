@@ -83,12 +83,27 @@ def format_info_message(map_name, current_players, max_players):
 
 # -- check_api_key
 def check_api_key(request):
-  api_key = request.headers.get('Authorization') 
-  if api_key == config.API_KEY:
+  expected_key = getattr(config, "API_KEY", None)
+
+  # Если ключ не задан (пустая строка/None), авторизацию отключаем.
+  # Основной барьер безопасности в этом случае — WEB_ALLOWED_IPS.
+  if not expected_key:
     return True
-  else:
-    logger.info(f"Неверный API-ключ")
-    return False
+
+  provided_key = request.headers.get("Authorization") or request.headers.get("X-Api-Key")
+  if provided_key == expected_key:
+    return True
+
+  logger.info(
+    "Webhook unauthorized: ip=%s method=%s url=%s content_length=%s content_type=%s user_agent=%s",
+    request.remote,
+    request.method,
+    request.url,
+    request.content_length,
+    request.content_type,
+    request.headers.get("User-Agent"),
+  )
+  return False
 
 # !SECTION
 
