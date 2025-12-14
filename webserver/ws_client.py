@@ -201,4 +201,12 @@ ws.add_post('/webhook', handle_webhook)
 
 @observer.subscribe(Event.WS_IP_NOT_ALLOWED)
 async def ev_ip_not_allowed(data):
-  logger.info(f"IP NOT ADDLOWED: IP: \"{data['request_remote']}\", url:\"{data['request_url']}\", \"{data['request_method']}\", \"{data['request_headers']}\", \"{data['request_body']}\"")
+  logger.info(
+    "IP NOT ALLOWED: ip=%s method=%s url=%s content_length=%s content_type=%s user_agent=%s",
+    data.get("request_remote"),
+    data.get("request_method"),
+    data.get("request_url"),
+    data.get("request_content_length"),
+    data.get("request_content_type"),
+    data.get("request_user_agent"),
+  )

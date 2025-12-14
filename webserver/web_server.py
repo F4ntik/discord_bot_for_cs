@@ -65,12 +65,15 @@ class WebServer:
     """
     client_ip: str = request.remote
     if client_ip not in self.allowed_ips:
+      # Не читаем тело запроса для неразрешённых IP: это может быть большой payload/мусор и засорять логи.
       await observer.notify(Event.WS_IP_NOT_ALLOWED, {
         "request_remote": request.remote,
         "request_url": request.url,
         "request_method": request.method,
         "request_headers": request.headers,
-        "request_body": await request.text()
+        "request_content_length": request.content_length,
+        "request_content_type": request.content_type,
+        "request_user_agent": request.headers.get("User-Agent"),
       })
       return web.Response(status=403, text="Access Forbidden: Your IP is not allowed.")
     

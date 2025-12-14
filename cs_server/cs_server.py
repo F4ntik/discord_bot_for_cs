@@ -3,6 +3,7 @@ from cs_server.csrcon import CSRCON, ConnectionError as CSConnectionError, Comma
 
 import discord
 import asyncio
+import time
 
 import config
 
@@ -11,6 +12,8 @@ cs_server: CSRCON = CSRCON(host=config.CS_HOST,
                            password=config.CS_RCON_PASSWORD)
 
 _cs_info_webhook_event: asyncio.Event = asyncio.Event()
+_connect_guard_lock: asyncio.Lock = asyncio.Lock()
+_last_connect_attempt_at: float = 0.0
 
 @observer.subscribe(Event.WBH_INFO)
 async def _cs_info_webhook_received(data) -> None:
@@ -73,6 +76,18 @@ async def get_status():
 @observer.subscribe(Event.BE_READY)
 @nsroute.create_route("/connect_to_cs")
 async def connect():
+  global _last_connect_attempt_at
+
+  if cs_server.connected:
+    return
+
+  async with _connect_guard_lock:
+    now = time.monotonic()
+    min_interval = getattr(config, "CS_CONNECT_MIN_INTERVAL", 2)
+    if min_interval and (now - _last_connect_attempt_at) < float(min_interval):
+      return
+    _last_connect_attempt_at = now
+
   try:
     await cs_server.connect_to_server()
     logger.info(f"CS Server: Успешно подключен")

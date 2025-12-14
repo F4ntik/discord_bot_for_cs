@@ -1,6 +1,7 @@
 from io import BytesIO
 from typing import Optional
 import socket
+import re
 
 startBytes = b'\xFF\xFF\xFF\xFF'
 endBytes = b'\n'
@@ -101,18 +102,16 @@ class RCON:
       if raw.startswith(startBytes):
         raw = raw[len(startBytes):]
 
-      text = raw.decode(errors="ignore").strip()
-      parts = text.split()
+      text = raw.decode(errors="ignore").strip("\x00\r\n ")
 
-      # Встречаются варианты:
-      # - "challenge <number>"
-      # - "challenge rcon <number>"
-      if len(parts) >= 3 and parts[0].lower() == "challenge" and parts[1].lower() == "rcon":
-        return parts[2]
-      if len(parts) >= 2 and parts[0].lower() == "challenge":
-        return parts[1]
-      if parts:
-        return parts[-1]
+      match = re.search(r"challenge(?:\s+rcon)?\s+(-?\d+)", text, flags=re.IGNORECASE)
+      if match:
+        return match.group(1)
+
+      # Фоллбек: иногда в пакете есть мусор/префиксы, но число всё равно присутствует.
+      numbers = re.findall(r"-?\d+", text)
+      if numbers:
+        return numbers[-1]
 
       raise ServerOffline(f"Некорректный ответ challenge: {text!r}")
     except Exception as e:
@@ -142,9 +141,20 @@ class RCON:
       msg.write(endBytes)
 
       self.sock.send(msg.getvalue())
-      response = BytesIO(self.sock.recv(packetSize))
+      raw = self.sock.recv(packetSize)
 
-      return response.getvalue()[5:-3].decode()
+      if raw.startswith(startBytes):
+        raw = raw[len(startBytes):]
+
+      # Типичный ответ HLDS: "print\n<text>\n\0" или "l<text>\n\0"
+      if raw.startswith(b'print'):
+        raw = raw[len(b'print'):]
+        if raw.startswith(b'\n'):
+          raw = raw[1:]
+      elif raw.startswith(b'l'):
+        raw = raw[1:]
+
+      return raw.decode(errors="ignore").strip("\x00\r\n ")
     except Exception as e:
       self.disconnect()
       raise ServerOffline(f"Ошибка в execute (RCON) (Возможно, сервер оффлайн): {str(e)}")
