@@ -96,8 +96,25 @@ class RCON:
       msg.write(endBytes)
       self.sock.send(msg.getvalue())
 
-      response = BytesIO(self.sock.recv(packetSize))
-      return str(response.getvalue()).split(" ")[1]
+      raw = self.sock.recv(packetSize)
+
+      if raw.startswith(startBytes):
+        raw = raw[len(startBytes):]
+
+      text = raw.decode(errors="ignore").strip()
+      parts = text.split()
+
+      # Встречаются варианты:
+      # - "challenge <number>"
+      # - "challenge rcon <number>"
+      if len(parts) >= 3 and parts[0].lower() == "challenge" and parts[1].lower() == "rcon":
+        return parts[2]
+      if len(parts) >= 2 and parts[0].lower() == "challenge":
+        return parts[1]
+      if parts:
+        return parts[-1]
+
+      raise ServerOffline(f"Некорректный ответ challenge: {text!r}")
     except Exception as e:
       self.disconnect()
       raise ServerOffline(f"Ошибка в getChallenge (RCON) (Возможно, сервер оффлайн): {str(e)}")

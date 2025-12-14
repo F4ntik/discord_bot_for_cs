@@ -110,7 +110,17 @@ async def send_status_message(message: str, channel: discord.TextChannel):
   except Exception as err:
     logger.error(f"Dbot: Неизвестная ошибка при очистке сообщений перед отправкой статуса: {err}")
 
-  cs_status_message = await channel.send(f"```ansi\n{message}```")
+  try:
+    cs_status_message = await channel.send(f"```ansi\n{message}```")
+  except discord.Forbidden as err:
+    logger.error(f"Dbot: Нет прав для отправки CS_STATUS в Discord: {err}")
+    cs_status_message = None
+  except discord.HTTPException as err:
+    logger.error(f"Dbot: Ошибка HTTP при отправке CS_STATUS в Discord: {err}")
+    cs_status_message = None
+  except Exception as err:
+    logger.error(f"Dbot: Ошибка при отправке CS_STATUS в Discord: {err}")
+    cs_status_message = None
 
 # !SECTION
 

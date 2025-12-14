@@ -79,11 +79,33 @@ class Observer:
       **kwargs: Ключевые аргументы, которые будут переданы в функции обратного вызова.
     """
     if event.value in self._subscribers:
-      tasks = []
+      tasks: List[asyncio.Task] = []
+      callbacks: List[Callable] = []
+
       for callback in self._subscribers[event.value]:
-        tasks.append(asyncio.create_task(callback(*args, **kwargs)))
+        callbacks.append(callback)
+        tasks.append(
+          asyncio.create_task(
+            callback(*args, **kwargs),
+            name=f"observer:{event.value}:{getattr(callback, '__qualname__', repr(callback))}",
+          )
+        )
+
       if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        loop = asyncio.get_running_loop()
+
+        for task, callback, result in zip(tasks, callbacks, results):
+          if isinstance(result, Exception):
+            loop.call_exception_handler(
+              {
+                "message": "Observer subscriber raised an exception",
+                "event": event.value,
+                "subscriber": getattr(callback, "__qualname__", repr(callback)),
+                "task": task,
+                "exception": result,
+              }
+            )
 
 
 # !SECTION

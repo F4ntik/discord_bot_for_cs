@@ -13,10 +13,16 @@ from bot import utilities as bot_utilities
 
 
 bot = dbot.bot
+_startup_ready_sent: bool = False
 
 # -- on_ready
 @bot.event
 async def on_ready():
+  global _startup_ready_sent
+  if _startup_ready_sent:
+    logger.info(f"DBot {bot.user.name} переподключился к Discord")
+    return
+  _startup_ready_sent = True
   logger.info(f"DBot {bot.user.name} запущен")
 
   admin_channel_id = getattr(config, "ADMIN_CHANNEL_ID", None)
@@ -86,10 +92,26 @@ async def setup_hook():
 async def status_task():
   await observer.notify(Event.BT_CS_Status)
 
+@status_task.error
+async def status_task_error(error: Exception):
+  logger.error(f"DBot: status_task завершился с ошибкой: {error}")
+  try:
+    status_task.restart()
+  except Exception as restart_error:
+    logger.error(f"DBot: не удалось перезапустить status_task: {restart_error}")
+
 # -- (task) cs_connect_task
 @discord.ext.tasks.loop(seconds=config.CS_RECONNECT_INTERVAL)
 async def cs_connect_task():
   await nsroute.call_route("/connect_to_cs") 
+
+@cs_connect_task.error
+async def cs_connect_task_error(error: Exception):
+  logger.error(f"DBot: cs_connect_task завершился с ошибкой: {error}")
+  try:
+    cs_connect_task.restart()
+  except Exception as restart_error:
+    logger.error(f"DBot: не удалось перезапустить cs_connect_task: {restart_error}")
 
 # -- ev_cs_connected
 @observer.subscribe(Event.CS_CONNECTED)

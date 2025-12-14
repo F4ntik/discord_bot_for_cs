@@ -55,6 +55,8 @@ class CSRCON:
     :raises ConnectionError: Если не удалось подключиться к серверу.
     """
     try:
+      self.cs_server.disconnect()
+      self.connected = False
       self.cs_server.connect()
       self.connected = True
     except Exception as e:
