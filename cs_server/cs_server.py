@@ -12,13 +12,16 @@ cs_server: CSRCON = CSRCON(host=config.CS_HOST,
                            password=config.CS_RCON_PASSWORD)
 
 _cs_info_webhook_event: asyncio.Event = asyncio.Event()
+_cs_info_timeout_streak: int = 0
 _connect_guard_lock: asyncio.Lock = asyncio.Lock()
 _last_connect_attempt_at: float = 0.0
 
 @observer.subscribe(Event.WBH_INFO)
 async def _cs_info_webhook_received(data) -> None:
+  global _cs_info_timeout_streak
   if not _cs_info_webhook_event.is_set():
     _cs_info_webhook_event.set()
+  _cs_info_timeout_streak = 0
 
 # SECTION Utlities
 
@@ -54,6 +57,7 @@ def escape_rcon_param(value) -> str:
 # -- get_status 
 @observer.subscribe(Event.BT_CS_Status)
 async def get_status():
+  global _cs_info_timeout_streak
   if not cs_server.connected:
     return
   
@@ -66,7 +70,14 @@ async def get_status():
       try:
         await asyncio.wait_for(_cs_info_webhook_event.wait(), timeout=timeout)
       except asyncio.TimeoutError:
-        raise CommandExecutionError(f"Таймаут ожидания webhook info ({timeout}с)")
+        _cs_info_timeout_streak += 1
+        logger.error(f"CS Server: Таймаут ожидания webhook info ({timeout}с), подряд: {_cs_info_timeout_streak}")
+
+        max_misses = getattr(config, "CS_INFO_WEBHOOK_MAX_MISSES", 3)
+        if max_misses and _cs_info_timeout_streak >= int(max_misses):
+          _cs_info_timeout_streak = 0
+          raise CommandExecutionError(f"Превышен лимит пропусков webhook info ({max_misses})")
+        return
   except CommandExecutionError as err:
     logger.error(f"CS Server: {err}")
     await cs_server.disconnect()
@@ -108,6 +119,7 @@ async def send_message(data):
   command = f"ultrahc_ds_send_msg \"{author}\" \"{content}\""
 
   try:
+    logger.info(f"CS Server: отправка сообщения в CS от {author} (len={len(content)})")
     await cs_server.exec(command)
   except CommandExecutionError as err:
     logger.error(f"CS Server: {err}")

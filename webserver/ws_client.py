@@ -173,16 +173,26 @@ async def handle_message(data: dict):
 
 # -- handle_info
 async def handle_info(data):
-  map_name = data.get('map')
-  current_players = data.get('current_players', [])
-  max_players = data.get('max_players')
+  try:
+    map_name = data.get('map')
+    current_players = data.get('current_players', [])
+    max_players = data.get('max_players')
 
-  formatted_info = format_info_message(map_name, current_players, max_players)
+    formatted_info = format_info_message(map_name, current_players, max_players)
 
-  await observer.notify(Event.WBH_INFO, {
-    "info_message": formatted_info,
-    "current_players": current_players
-  })
+    logger.info(
+      "Webhook info received: map=%s players=%s/%s",
+      map_name,
+      len(current_players) if isinstance(current_players, list) else "?",
+      max_players,
+    )
+
+    await observer.notify(Event.WBH_INFO, {
+      "info_message": formatted_info,
+      "current_players": current_players
+    })
+  except Exception as err:
+    logger.exception(f"Ошибка обработки webhook info: {err}")
 
 # !SECTION
 
@@ -201,13 +211,47 @@ async def handle_webhook(request: web.Request):
   if not check_api_key(request):
     return web.Response(text='Unauthorized', status=401)
   
-  data: dict = await request.json()
-  message_type: str = data['type']
+  try:
+    data: dict = await request.json()
+  except Exception as err:
+    logger.error(
+      "Webhook bad json: ip=%s method=%s url=%s content_length=%s content_type=%s error=%s",
+      request.remote,
+      request.method,
+      request.url,
+      request.content_length,
+      request.content_type,
+      err,
+    )
+    return web.Response(text="Bad Request", status=400)
+
+  message_type: str = data.get('type')
+  if not message_type:
+    logger.error(
+      "Webhook missing type: ip=%s method=%s url=%s content_length=%s",
+      request.remote,
+      request.method,
+      request.url,
+      request.content_length,
+    )
+    return web.Response(text="Bad Request", status=400)
 
   if message_type == WebHooksType.Message.value:
-    await handle_message(data)
+    try:
+      await handle_message(data)
+    except Exception as err:
+      logger.exception(f"Ошибка обработки webhook message: {err}")
   elif message_type == WebHooksType.Info.value:
     await handle_info(data)
+  else:
+    logger.error(
+      "Webhook unknown type: type=%s ip=%s method=%s url=%s",
+      message_type,
+      request.remote,
+      request.method,
+      request.url,
+    )
+    return web.Response(text="Bad Request", status=400)
 
   return web.Response(text='OK')
 
