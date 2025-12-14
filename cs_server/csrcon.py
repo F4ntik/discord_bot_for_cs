@@ -46,6 +46,9 @@ class CSRCON:
     :param password: Пароль для подключения к серверу.
     """
     self.cs_server: RCON = RCON(host=host, password=password)
+    self.host: str = host
+    self.password: str = password
+    self.port: int = self.cs_server.port
     self.connected: bool = False
     self._lock: asyncio.Lock = asyncio.Lock()
 
@@ -103,5 +106,24 @@ class CSRCON:
         return self.cs_server.execute(command)
       except Exception as e:
         raise CommandExecutionError(f"Ошибка выполнения команды: {str(e)}")
+
+  # -- exec_fresh()
+  async def exec_fresh(self, command: str, *, validate_password: bool = False) -> str:
+    """
+    Выполняет команду через временное RCON-подключение (отдельный сокет на каждый вызов).
+
+    :param command: Команда для выполнения.
+    :param validate_password: Проверять ли пароль через stats перед выполнением.
+    :raises CommandExecutionError: Если возникла ошибка выполнения команды.
+    """
+    temp_rcon = RCON(host=self.host, port=self.port, password=self.password)
+
+    try:
+      temp_rcon.connect(validate_password=validate_password)
+      return temp_rcon.execute(command)
+    except Exception as e:
+      raise CommandExecutionError(f"Ошибка выполнения команды: {str(e)}")
+    finally:
+      temp_rcon.disconnect()
 
 # !SECTION

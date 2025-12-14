@@ -51,11 +51,12 @@ class RCON:
     self.sock: Optional[socket.socket] = None
 
   # -- connect()
-  def connect(self, timeout: int = 6) -> None:
+  def connect(self, timeout: int = 6, validate_password: bool = True) -> None:
     """
     Подключение к RCON серверу.
 
     :param timeout: Время ожидания подключения в секундах.
+    :param validate_password: Выполнять ли проверку пароля через команду stats.
     :raises BadConnection: Если подключение не удалось.
     :raises BadRCONPassword: Если неверный пароль RCON.
     """
@@ -64,7 +65,7 @@ class RCON:
 
     try:
       self.sock.connect((self.host, int(self.port)))
-      if self.execute('stats') == 'Bad rcon_password.':
+      if validate_password and self.execute('stats') == 'Bad rcon_password.':
         raise BadRCONPassword("Неверный пароль RCON.")
     except Exception as e:
       self.disconnect()

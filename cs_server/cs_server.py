@@ -89,7 +89,7 @@ async def get_status():
   
   try:
     _cs_info_webhook_event.clear()
-    response = await cs_server.exec("ultrahc_ds_get_info")
+    response = await cs_server.exec_fresh("ultrahc_ds_get_info", validate_password=False)
     _validate_rcon_response("ultrahc_ds_get_info", response)
 
     timeout = getattr(config, "CS_INFO_WEBHOOK_TIMEOUT", 12)
@@ -99,12 +99,6 @@ async def get_status():
       except asyncio.TimeoutError:
         _cs_info_timeout_streak += 1
         logger.error(f"CS Server: Таймаут ожидания webhook info ({timeout}с), подряд: {_cs_info_timeout_streak}")
-
-        max_misses = getattr(config, "CS_INFO_WEBHOOK_MAX_MISSES", 3)
-        if max_misses and _cs_info_timeout_streak >= int(max_misses):
-          _cs_info_timeout_streak = 0
-          raise CommandExecutionError(f"Превышен лимит пропусков webhook info ({max_misses})")
-        return
   except CommandExecutionError as err:
     logger.error(f"CS Server: {err}")
     await cs_server.disconnect()
