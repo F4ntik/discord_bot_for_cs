@@ -43,6 +43,8 @@ class Event(Enum):
   BC_CS_UNBAN = "bc_cs_unban"
   BC_CS_MAP_CHANGE = "bc_cs_map_change"
   BC_CS_MAP_INSTALL = "bc_cs_map_install"
+  CS_MAP_INSTALL_DONE = "cs_map_install_done"
+  CS_MAP_INSTALL_FAILED = "cs_map_install_failed"
 
 
 # SECTION Observer

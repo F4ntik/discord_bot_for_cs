@@ -39,6 +39,21 @@ CS_INFO_WEBHOOK_TIMEOUT = 12
 CS_INFO_WEBHOOK_MAX_MISSES = 3
 #-------------------------------------------------------------------
 
+# Параметры установки карт через /map_install (FTP/FTPS + опциональная ротация)
+MAP_DEPLOY_PROTOCOL = "ftps"  # ftp | ftps
+MAP_FTP_HOST = ""
+MAP_FTP_PORT = 21
+MAP_FTP_USER = ""
+MAP_FTP_PASSWORD = ""
+MAP_FTP_PASSIVE = True
+MAP_FTP_USE_TLS = True
+MAP_FTP_TIMEOUT_SEC = 30
+MAP_REMOTE_MAPS_DIR = "/cstrike/maps"
+MAP_INSTALL_SYNC_TIMEOUT_SEC = 12
+MAP_INSTALL_MAX_FILE_MB = 200
+MAP_INSTALL_WORKDIR = "uploaded_maps"
+#-------------------------------------------------------------------
+
 # Хост и пароль для подключения к серверу (например, игровому серверу)
 CS_HOST = '111.111.11.11'  # Локальный хост
 CS_RCON_PASSWORD = ''  # Пароль для удаленного управления

@@ -291,3 +291,17 @@ async def cmd_map_change(data):
     await interaction.followup.send(content="Не удалось сменить карту", ephemeral=True)
 
 # !SECTION
+
+@nsroute.create_route("/cs/reload_map_list")
+async def route_cs_reload_map_list():
+  if not cs_server.connected:
+    return {"status": "not_connected"}
+
+  command = "ultrahc_ds_reload_map_list"
+  try:
+    response = await cs_server.exec(command)
+    _validate_rcon_response(command, response)
+    return {"status": "ok"}
+  except CommandExecutionError as err:
+    logger.error(f"CS Server: route /cs/reload_map_list failed: {err}")
+    return {"status": "error", "error": str(err)}

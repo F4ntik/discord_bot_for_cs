@@ -37,7 +37,12 @@ async def cmd_help(interaction: discord.Interaction):
       ("unban", " <steam_id>", "Разблокирует игрока по Steam ID (нужны права manage_messages).", False),
       ("sync_maps", "", "Синхронизирует список карт между MySQL, Redis и сервером (нужны права manage_messages).", False),
       ("map_change", " <map>", "Меняет текущую карту на сервере (нужны права manage_messages).", False),
-      ("map_install", " <file> [map_name] [min_players] [max_players]", "Устанавливает карту из вложения и сохраняет параметры.", True),
+      (
+        "map_install",
+        " <file> [map_name] [min_players] [max_players] [add_to_rotation] [priority]",
+        "Загружает карту (.bsp/.zip), отправляет на FTP/FTPS и опционально добавляет в ротацию.",
+        False,
+      ),
       ("map_add", " <map_name> [activated] [min_players] [max_players] [priority]", "Добавляет карту в базу данных (нужны права manage_messages).", False),
       ("map_delete", " <map_name>", "Удаляет карту из базы данных (нужны права manage_messages).", False),
       ("map_update", " <map_name> [activated] [min_players] [max_players] [priority]", "Обновляет параметры карты в базе данных (нужны права manage_messages).", False),
@@ -220,12 +225,14 @@ async def cmd_map_change(interaction: discord.Interaction, map: str):
     "map": map
   })
 
-@bot.tree.command(name="map_install", description="Устанавливает карту из вложения")
+@bot.tree.command(name="map_install", description="Устанавливает карту (.bsp/.zip) через FTP/FTPS")
 @discord.app_commands.describe(
   file="Файл карты (.bsp или .zip)",
   map_name="Имя карты без расширения",
   min_players="Минимальное количество игроков",
-  max_players="Максимальное количество игроков"
+  max_players="Максимальное количество игроков",
+  add_to_rotation="Добавить карту в ротацию (БД/Redis + reload map list)",
+  priority="Приоритет карты в ротации (меньше — выше)"
 )
 @commands.has_permissions(manage_messages=True)
 async def cmd_map_install(
@@ -234,6 +241,8 @@ async def cmd_map_install(
   map_name: str | None = None,
   min_players: int | None = None,
   max_players: int | None = None,
+  add_to_rotation: bool = False,
+  priority: int | None = None,
 ):
   await interaction.response.defer(thinking=True, ephemeral=True)
 
@@ -243,6 +252,8 @@ async def cmd_map_install(
     "map_name": map_name,
     "min_players": min_players,
     "max_players": max_players,
+    "add_to_rotation": add_to_rotation,
+    "priority": priority,
   })
 
 # -- /map_add

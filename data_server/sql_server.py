@@ -433,3 +433,46 @@ async def route_get_map_list():
     return map_list_cache
     
   return None
+
+
+@nsroute.create_route("/db/map_exists")
+async def route_db_map_exists(map_name: str):
+  if not mysql.is_connected():
+    logger.error("MySQL: route /db/map_exists без соединения с БД")
+    return None
+
+  return await map_record_exist(map_name)
+
+
+@nsroute.create_route("/db/map_add_internal")
+async def route_db_map_add_internal(
+  map_name: str,
+  activated: int = 1,
+  min_players: int = 0,
+  max_players: int = 32,
+  priority: int = 100,
+):
+  if not mysql.is_connected():
+    logger.error("MySQL: route /db/map_add_internal без соединения с БД")
+    return {"status": "db_unavailable"}
+
+  exists = await map_record_exist(map_name)
+  if exists:
+    return {"status": "exists"}
+  if exists is None:
+    return {"status": "error"}
+
+  query = "INSERT INTO maps (map_name, activated, min_players, max_players, priority) VALUES (%s, %s, %s, %s, %s)"
+  query_values = (map_name, activated, min_players, max_players, priority)
+
+  try:
+    rows = await mysql.execute_change(query, query_values)
+  except QueryError as err:
+    logger.error(f"MySQL: /db/map_add_internal failed: {err}")
+    return {"status": "error"}
+
+  if rows == 0:
+    return {"status": "error"}
+
+  await nsroute.call_route("/redis/update_map_list", "add", map_name, activated)
+  return {"status": "added"}
