@@ -19,6 +19,9 @@
 //-----------------------------------------
 
 #define TEXT_LENGHT 128
+#define DS_SEND_CMD_TEXT_LENGTH 256
+#define DS_SEND_AUTHOR_LENGTH 64
+#define DS_SEND_MESSAGE_LENGTH 192
 
 #define CVARS_LENGTH 128
 
@@ -377,12 +380,12 @@ public HookKickPlayerCmd() {
 //-----------------------------------------
 
 public HookMsgFromDs() {
-	new str[64];
-	read_args(str, charsmax(str));
+	new cmd_text[DS_SEND_CMD_TEXT_LENGTH];
+	read_args(cmd_text, charsmax(cmd_text));
 	
-	new author[64];
-	new msg[128];
-	parse(str, author, charsmax(author), msg, charsmax(msg));
+	new author[DS_SEND_AUTHOR_LENGTH];
+	new msg[DS_SEND_MESSAGE_LENGTH];
+	parse(cmd_text, author, charsmax(author), msg, charsmax(msg));
 	client_print_color(0, print_team_blue, "%s ^3%s^1 : ^4%s", DISCORD_PREFIX, author, msg);
 }
 
