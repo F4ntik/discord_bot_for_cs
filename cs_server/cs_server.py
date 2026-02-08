@@ -11,8 +11,6 @@ import config
 cs_server: CSRCON = CSRCON(host=config.CS_HOST,
                            password=config.CS_RCON_PASSWORD)
 
-_cs_info_webhook_event: asyncio.Event = asyncio.Event()
-_cs_info_timeout_streak: int = 0
 _connect_guard_lock: asyncio.Lock = asyncio.Lock()
 _last_connect_attempt_at: float = 0.0
 _disconnect_notified: bool = False
@@ -41,13 +39,6 @@ def _validate_rcon_response(command: str, response: str) -> None:
   lowered = str(response).lower()
   if "unknown command" in lowered or "bad rcon_password" in lowered or "bad password" in lowered:
     raise CommandExecutionError(f"Команда {command} вернула ошибку: {response}")
-
-@observer.subscribe(Event.WBH_INFO)
-async def _cs_info_webhook_received(data) -> None:
-  global _cs_info_timeout_streak
-  if not _cs_info_webhook_event.is_set():
-    _cs_info_webhook_event.set()
-  _cs_info_timeout_streak = 0
 
 # SECTION Utlities
 
@@ -80,30 +71,6 @@ def escape_rcon_param(value) -> str:
 # !SECTION
 
 # SECTION Events
-# -- get_status 
-@observer.subscribe(Event.BT_CS_Status)
-async def get_status():
-  global _cs_info_timeout_streak
-  if not cs_server.connected:
-    return
-  
-  try:
-    _cs_info_webhook_event.clear()
-    response = await cs_server.exec_fresh("ultrahc_ds_get_info", validate_password=False)
-    _validate_rcon_response("ultrahc_ds_get_info", response)
-
-    timeout = getattr(config, "CS_INFO_WEBHOOK_TIMEOUT", 12)
-    if timeout and timeout > 0:
-      try:
-        await asyncio.wait_for(_cs_info_webhook_event.wait(), timeout=timeout)
-      except asyncio.TimeoutError:
-        _cs_info_timeout_streak += 1
-        logger.error(f"CS Server: Таймаут ожидания webhook info ({timeout}с), подряд: {_cs_info_timeout_streak}")
-  except CommandExecutionError as err:
-    logger.error(f"CS Server: {err}")
-    await cs_server.disconnect()
-    await _notify_cs_disconnected_once()
-
 # -- on_ready connect
 @observer.subscribe(Event.BE_READY)
 @nsroute.create_route("/connect_to_cs")

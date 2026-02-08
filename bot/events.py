@@ -3,7 +3,6 @@ from observer.observer_client import logger, observer, Event, Param, nsroute
 
 import discord
 import discord.ext
-import asyncio
 
 from bot.bot_server import dbot
 
@@ -87,19 +86,6 @@ async def setup_hook():
   guild = bot.get_guild(config.GUILD_ID)
   await bot.tree.sync(guild=guild)
 
-# -- (task) status_task
-@discord.ext.tasks.loop(seconds=config.STATUS_INTERVAL)
-async def status_task():
-  await observer.notify(Event.BT_CS_Status)
-
-@status_task.error
-async def status_task_error(error: Exception):
-  logger.error(f"DBot: status_task завершился с ошибкой: {error}")
-  try:
-    status_task.restart()
-  except Exception as restart_error:
-    logger.error(f"DBot: не удалось перезапустить status_task: {restart_error}")
-
 # -- (task) cs_connect_task
 @discord.ext.tasks.loop(seconds=config.CS_RECONNECT_INTERVAL)
 async def cs_connect_task():
@@ -119,14 +105,8 @@ async def ev_cs_connected():
   if cs_connect_task.is_running():
     cs_connect_task.cancel()
 
-  if not status_task.is_running():
-    status_task.start()
-
 # -- ev_cs_disconnected
 @observer.subscribe(Event.CS_DISCONNECTED)
 async def ev_cs_disconnected():
-  if status_task.is_running():
-    status_task.cancel()
-
   if not cs_connect_task.is_running():
     cs_connect_task.start()

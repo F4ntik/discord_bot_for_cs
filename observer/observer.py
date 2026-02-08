@@ -23,9 +23,6 @@ class Event(Enum):
   BE_MESSAGE = "be_message"
   BE_MEMBER_UPDATE = "be_member_update"
 
-  # Bot tasks
-  BT_CS_Status = "bt_cs_status"
-
   # Bot command events
   BC_PING = "bc_ping"
 

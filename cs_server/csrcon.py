@@ -1,6 +1,5 @@
 from rehlds.rcon import RCON
 from typing import Optional
-from enum import Enum
 import asyncio
 
 # SECTION Исключения CSServer
@@ -20,20 +19,12 @@ class ConnectionError(CSServerError):
   """Исключение для ошибок подключения к серверу."""
   pass
 
-# -- StatusError
-class StatusError(CSServerError):
-  """Исключение для ошибок при получении статуса сервера."""
-  pass
-
 # -- CommandExecutionError
 class CommandExecutionError(CSServerError):
   """Исключение для ошибок при выполнении команды на сервере."""
   pass
 
 # !SECTION
-
-class DefaultCommands(Enum):
-    GET_STATUS = "ultrahc_ds_get_info"
 
 # SECTION Class CSRCON
 class CSRCON:
@@ -77,21 +68,6 @@ class CSRCON:
     async with self._lock:
       self.cs_server.disconnect()
       self.connected = False
-
-  # -- fetch_status()
-  async def fetch_status(self) -> None:
-    """
-    Получает статус сервера и возвращает статус.
-
-    :raises ServerNotConnected: Если сервер не подключен.
-    :raises StatusError: Если произошла ошибка при получении статуса сервера.
-    """
-
-    async with self._lock:
-      try:
-        self.cs_server.execute(DefaultCommands.GET_STATUS.value)
-      except Exception as e:
-        raise StatusError(f"Ошибка получения статуса: {str(e)}")
 
   # -- exec()
   async def exec(self, command: str) -> str:

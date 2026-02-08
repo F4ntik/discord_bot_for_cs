@@ -22,6 +22,11 @@
 #define DS_SEND_CMD_TEXT_LENGTH 256
 #define DS_SEND_AUTHOR_LENGTH 64
 #define DS_SEND_MESSAGE_LENGTH 192
+#define INFO_JSON_LENGTH 4096
+#define INFO_PUSH_DEBOUNCE_SEC 1.0
+#define INFO_PUSH_HEARTBEAT_SEC 30.0
+#define TASK_INFO_PUSH 60001
+#define TASK_INFO_HEARTBEAT 60002
 
 #define CVARS_LENGTH 128
 
@@ -66,6 +71,8 @@ public plugin_init() {
 	register_concmd("ultrahc_ds_kick_player", "HookKickPlayerCmd");
 	
 	register_concmd("ultrahc_ds_get_info", "HookGetinfoCmd");
+	register_event("DeathMsg", "OnDeathMsg", "a");
+	register_event("TeamInfo", "OnTeamInfo", "a");
 	
 	#if defined _map_manager_core_included
 		register_concmd("ultrahc_ds_reload_map_list", "HookReloadMapList");
@@ -79,6 +86,9 @@ public plugin_init() {
 	bind_pcvar_string(create_cvar("ultrahc_ds_sql_user", ""), __cvar_str_list[_sql_user], CVARS_LENGTH);
 	bind_pcvar_string(create_cvar("ultrahc_ds_sql_pass", ""), __cvar_str_list[_sql_pass], CVARS_LENGTH);
 	bind_pcvar_string(create_cvar("ultrahc_ds_sql_db", ""), __cvar_str_list[_sql_db], CVARS_LENGTH);
+
+	set_task(INFO_PUSH_HEARTBEAT_SEC, "InfoHeartbeatTask", TASK_INFO_HEARTBEAT, "", 0, "b");
+	ScheduleInfoPush(5.0);
 	
 	AutoExecConfig(true, PLUGIN_CFG_NAME);
 }
@@ -95,7 +105,12 @@ public OnConfigsExecuted() {
 public client_putinserver(client_id) {
 	if(is_user_bot(client_id)) return;
 
+	ScheduleInfoPush();
 	set_task(1.0, "ClientPutInhandler", client_id);
+}
+
+public client_disconnected(client_id) {
+	ScheduleInfoPush();
 }
 
 //-----------------------------------------
@@ -193,8 +208,10 @@ public SayMessageHandler(owner_id) {
   
 	json_len += formatex(json[json_len], charsmax(json) - json_len, "{");
 	
-	replace_string(owner_name, charsmax(owner_name), "^"", "'");
-	replace_string(con_cmd_text, charsmax(con_cmd_text), "^"", "'");
+	replace_all(owner_name, charsmax(owner_name), "\\", "\\\\");
+	replace_all(owner_name, charsmax(owner_name), "^"", "'");
+	replace_all(con_cmd_text, charsmax(con_cmd_text), "\\", "\\\\");
+	replace_all(con_cmd_text, charsmax(con_cmd_text), "^"", "'");
 	
 	new steam_id[64];
 	get_user_authid(owner_id, steam_id, charsmax(steam_id));
@@ -252,8 +269,10 @@ public MessageModeCallback(owner_id) {
   
 	json_len += formatex(json[json_len], charsmax(json) - json_len, "{");
 	
-	replace_string(owner_name, charsmax(owner_name), "^"", "'");
-	replace_string(message, charsmax(message), "^"", "'");
+	replace_all(owner_name, charsmax(owner_name), "\\", "\\\\");
+	replace_all(owner_name, charsmax(owner_name), "^"", "'");
+	replace_all(message, charsmax(message), "\\", "\\\\");
+	replace_all(message, charsmax(message), "^"", "'");
 	
 	new steam_id[64];
 	get_user_authid(owner_id, steam_id, charsmax(steam_id));
@@ -270,6 +289,94 @@ public MessageModeCallback(owner_id) {
 	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPComplete", options_id)
 	
 	return PLUGIN_HANDLED;
+}
+
+public OnDeathMsg() {
+	ScheduleInfoPush();
+}
+
+public OnTeamInfo() {
+	ScheduleInfoPush();
+}
+
+ScheduleInfoPush(Float:delay = INFO_PUSH_DEBOUNCE_SEC) {
+	if(task_exists(TASK_INFO_PUSH)) return;
+	set_task(delay, "SendInfoSnapshotTask", TASK_INFO_PUSH);
+}
+
+public SendInfoSnapshotTask() {
+	SendInfoWebhook();
+}
+
+public InfoHeartbeatTask() {
+	SendInfoWebhook();
+}
+
+SendInfoWebhook() {
+	// send to discord webhook
+	new EzHttpOptions:options_id = ezhttp_create_options()
+	
+	ezhttp_option_set_header(options_id, "Authorization", __cvar_str_list[_webhook_token])
+	ezhttp_option_set_header(options_id, "Content-Type", "application/json")
+  
+	new json[INFO_JSON_LENGTH];
+	new json_len = 0;
+  
+	json_len += formatex(json[json_len], charsmax(json) - json_len, "{");
+	
+	new map_name[32];
+	get_mapname(map_name, charsmax(map_name));
+	replace_all(map_name, charsmax(map_name), "\\", "\\\\");
+	replace_all(map_name, charsmax(map_name), "^"", "'");
+  
+	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"type^":^"info^",");
+	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"map^":^"%s^",", map_name);
+	
+	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"current_players^":[");
+	
+	new players[MAX_PLAYERS], num;
+	get_players(players, num);
+	
+	new added_players = 0;
+	for(new i=0; i < num; i++) {
+		new id = players[i];
+	
+		if(!is_user_connected(id)) continue;
+		
+		new user_name[MAX_NAME_LENGTH];
+		get_user_name(id, user_name, charsmax(user_name));
+		
+		new user_auth[64];
+		get_user_authid(id, user_auth, charsmax(user_auth));
+		
+		replace_all(user_name, charsmax(user_name), "\\", "\\\\");
+		replace_all(user_name, charsmax(user_name), "^"", "'");
+		replace_all(user_auth, charsmax(user_auth), "\\", "\\\\");
+		replace_all(user_auth, charsmax(user_auth), "^"", "'");
+		
+		new user_frags = get_user_frags(id);
+		new user_deaths = get_user_deaths(id);
+		new user_team = get_user_team(id);
+
+		if(added_players > 0) {
+			json_len += formatex(json[json_len], charsmax(json) - json_len, ",");
+		}
+		
+		json_len += formatex(json[json_len], charsmax(json) - json_len, "{^"name^":^"%s^",", user_name);
+		json_len += formatex(json[json_len], charsmax(json) - json_len, "^"steam_id^":^"%s^",", user_auth);
+		json_len += formatex(json[json_len], charsmax(json) - json_len, "^"stats^":[%i, %i, %i]}", user_frags, user_deaths, user_team);
+		added_players++;
+	}
+	
+	json_len += formatex(json[json_len], charsmax(json) - json_len, "],");
+	
+	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"max_players^":%i", MaxClients);
+  
+	json_len += formatex(json[json_len], charsmax(json) - json_len, "}");
+
+	ezhttp_option_set_body(options_id, json)
+
+	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPComplete", options_id)
 }
 
 //-----------------------------------------
@@ -305,63 +412,7 @@ public HookChangeMapCmd() {
 //-----------------------------------------
 
 public HookGetinfoCmd() {
-	// send to discord webhook
-	new EzHttpOptions:options_id = ezhttp_create_options()
-	
-	ezhttp_option_set_header(options_id, "Authorization", __cvar_str_list[_webhook_token])
-	ezhttp_option_set_header(options_id, "Content-Type", "application/json")
-  
-	new json[1024];
-	new json_len = 0;
-  
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "{");
-	
-	new map_name[32];
-	get_mapname(map_name, charsmax(map_name));
-  
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"type^":^"info^",");
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"map^":^"%s^",", map_name);
-	
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"current_players^":[");
-	
-	new players[MAX_PLAYERS], num;
-	get_players(players, num);
-	
-	for(new i=0; i < num; i++) {
-		new id = players[i];
-	
-		if(!is_user_connected(id)) continue;
-		
-		new user_name[MAX_NAME_LENGTH];
-		get_user_name(id, user_name, charsmax(user_name));
-		
-		new user_auth[64];
-		get_user_authid(id, user_auth, charsmax(user_auth));
-		
-		replace_string(user_name, charsmax(user_name), "^"", "'");
-		
-		new user_frags = get_user_frags(id);
-		new user_deaths = get_user_deaths(id);
-		new user_team = get_user_team(id);
-		
-		json_len += formatex(json[json_len], charsmax(json) - json_len, "{^"name^":^"%s^",", user_name);
-		json_len += formatex(json[json_len], charsmax(json) - json_len, "^"steam_id^":^"%s^",", user_auth);
-		json_len += formatex(json[json_len], charsmax(json) - json_len, "^"stats^":[%i, %i, %i]}", user_frags, user_deaths, user_team);
-		
-		if(i < num-1) {
-			json_len += formatex(json[json_len], charsmax(json) - json_len, ",");
-		}
-	}
-	
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "],");
-	
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"max_players^":%i", MaxClients);
-  
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "}");
-
-	ezhttp_option_set_body(options_id, json)
-
-	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPComplete", options_id)
+	SendInfoWebhook();
 }
 
 //-----------------------------------------
