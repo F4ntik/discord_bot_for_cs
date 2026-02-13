@@ -16,6 +16,7 @@ REPO_URL="${REPO_URL:-https://github.com/F4ntik/discord_bot_for_cs}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV="$PROJECT_DIR/venv"
 REQ="$PROJECT_DIR/requirements.txt"
+MERGE_CONFIG_DEFAULTS="${MERGE_CONFIG_DEFAULTS:-1}"
 
 # --- Временная папка ---
 TMP_DIR="$(mktemp -d)"
@@ -49,6 +50,116 @@ rsync -a --delete \
   --exclude 'PROJECT_LOG.md' \
   --exclude 'AGENTS.md' \
   "$TMP_DIR/repo"/ "$PROJECT_DIR"/
+
+CURRENT_CONFIG="$PROJECT_DIR/config.py"
+TEMPLATE_CONFIG="$TMP_DIR/repo/config.py"
+
+merge_config_defaults() {
+  local current_config="$1"
+  local template_config="$2"
+  "$PYTHON_BIN" - "$current_config" "$template_config" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+ASSIGN_RE = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*=")
+
+
+def read_text(path: Path):
+    for enc in ("utf-8", "utf-8-sig", "cp1251", "latin-1"):
+        try:
+            return path.read_text(encoding=enc), enc
+        except UnicodeDecodeError:
+            continue
+    raise RuntimeError(f"Не удалось декодировать файл: {path}")
+
+
+def key_positions(lines):
+    positions = []
+    for idx, line in enumerate(lines):
+        m = ASSIGN_RE.match(line)
+        if m:
+            positions.append((idx, m.group(1)))
+    return positions
+
+
+def main() -> int:
+    current_path = Path(sys.argv[1])
+    template_path = Path(sys.argv[2])
+
+    current_text, current_enc = read_text(current_path)
+    template_text, _ = read_text(template_path)
+
+    current_lines = current_text.splitlines(keepends=True)
+    template_lines = template_text.splitlines(keepends=True)
+
+    current_keys = {key for _, key in key_positions(current_lines)}
+    template_pos = key_positions(template_lines)
+
+    added_keys = []
+    blocks = []
+
+    for idx, key in template_pos:
+        if key in current_keys:
+            continue
+
+        # Берем assignment + возможное многострочное значение до следующего ключа.
+        end = idx + 1
+        while end < len(template_lines) and not ASSIGN_RE.match(template_lines[end]):
+            end += 1
+
+        # Добавляем ближайшие комментарии прямо над параметром (без захвата чужих assignment).
+        start = idx
+        while start > 0:
+            prev = template_lines[start - 1]
+            if prev.lstrip().startswith("#") or prev.strip() == "":
+                start -= 1
+                continue
+            break
+
+        blocks.append("".join(template_lines[start:end]))
+        added_keys.append(key)
+        current_keys.add(key)
+
+    if not blocks:
+        print("[updater] config.py: новые параметры не найдены")
+        return 0
+
+    merged = current_text.rstrip("\n")
+    merged += "\n\n# --- Добавлено updater.sh: новые параметры из шаблона config.py ---\n"
+    for block in blocks:
+        merged += block
+        if not block.endswith("\n"):
+            merged += "\n"
+    if not merged.endswith("\n"):
+        merged += "\n"
+
+    current_path.write_text(merged, encoding=current_enc)
+    print(f"[updater] config.py: добавлено параметров: {len(added_keys)}")
+    print("[updater] config.py: " + ", ".join(added_keys))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PY
+}
+
+if [[ "$MERGE_CONFIG_DEFAULTS" != "0" ]]; then
+  if [[ -f "$TEMPLATE_CONFIG" ]]; then
+    if [[ -f "$CURRENT_CONFIG" ]]; then
+      echo "[updater] Слияние config.py (добавление новых параметров без перезаписи значений)"
+      merge_config_defaults "$CURRENT_CONFIG" "$TEMPLATE_CONFIG"
+    else
+      echo "[updater] config.py отсутствует, копирование шаблона из репозитория"
+      cp "$TEMPLATE_CONFIG" "$CURRENT_CONFIG"
+    fi
+  else
+    echo "[updater] Шаблон config.py не найден в репозитории, пропуск слияния"
+  fi
+else
+  echo "[updater] MERGE_CONFIG_DEFAULTS=0, слияние config.py отключено"
+fi
 
 echo "[updater] Подготовка виртуального окружения"
 if [[ ! -d "$VENV" ]]; then

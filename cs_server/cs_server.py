@@ -4,6 +4,7 @@ from cs_server.csrcon import CSRCON, ConnectionError as CSConnectionError, Comma
 import discord
 import asyncio
 import time
+from typing import List
 
 import config
 
@@ -14,6 +15,14 @@ cs_server: CSRCON = CSRCON(host=config.CS_HOST,
 _connect_guard_lock: asyncio.Lock = asyncio.Lock()
 _last_connect_attempt_at: float = 0.0
 _disconnect_notified: bool = False
+
+MAPS_OUTPUT_BEGIN = "ULTRAHC_MAPS_BEGIN"
+MAPS_OUTPUT_END = "ULTRAHC_MAPS_END"
+MAPS_OUTPUT_ERROR = "ULTRAHC_MAPS_ERROR"
+MAPS_PAGE_DEFAULT = 1
+MAPS_PER_PAGE_DEFAULT = 20
+MAPS_PER_PAGE_MAX = 50
+DISCORD_MESSAGE_SAFE_LIMIT = 1800
 
 
 def _mark_connected() -> None:
@@ -67,6 +76,140 @@ def escape_rcon_param(value) -> str:
   text = text.replace("\\", "\\\\")
 
   return text
+
+
+def _normalize_maps_pagination(page: int, per_page: int) -> tuple[int, int]:
+  page = page or MAPS_PAGE_DEFAULT
+  per_page = per_page or MAPS_PER_PAGE_DEFAULT
+
+  if page < 1:
+    raise ValueError("Параметр page должен быть не меньше 1.")
+
+  if per_page < 1 or per_page > MAPS_PER_PAGE_MAX:
+    raise ValueError(f"Параметр per_page должен быть в диапазоне 1..{MAPS_PER_PAGE_MAX}.")
+
+  return page, per_page
+
+
+def _parse_server_maps_response(command: str, expected_mode: str, response: str) -> List[str]:
+  if response is None:
+    raise CommandExecutionError(f"Команда {command} не вернула данные.")
+
+  lines = [line.strip() for line in str(response).splitlines() if line.strip()]
+  maps: List[str] = []
+  in_section = False
+  end_found = False
+  errors: List[str] = []
+
+  for line in lines:
+    if line.startswith(MAPS_OUTPUT_BEGIN):
+      in_section = True
+      begin_parts = line.split(maxsplit=1)
+      if len(begin_parts) > 1:
+        mode = begin_parts[1].strip().lower()
+        if mode and mode != expected_mode.lower():
+          raise CommandExecutionError(
+            f"Команда {command} вернула режим {mode}, ожидался {expected_mode}."
+          )
+      continue
+
+    if not in_section:
+      continue
+
+    if line.startswith(MAPS_OUTPUT_ERROR):
+      errors.append(line[len(MAPS_OUTPUT_ERROR):].strip() or "unknown_error")
+      continue
+
+    if line.startswith(MAPS_OUTPUT_END):
+      end_found = True
+      break
+
+    maps.append(line)
+
+  if not in_section:
+    raise CommandExecutionError(f"Команда {command} не вернула маркер {MAPS_OUTPUT_BEGIN}.")
+
+  if not end_found:
+    raise CommandExecutionError(
+      f"Команда {command} вернула неполный ответ (нет маркера {MAPS_OUTPUT_END})."
+    )
+
+  if errors:
+    raise CommandExecutionError(f"Команда {command} вернула ошибку: {', '.join(errors)}")
+
+  return maps
+
+
+async def _reply_server_maps(
+  interaction: discord.Interaction,
+  *,
+  mode: str,
+  source_label: str,
+  page: int,
+  per_page: int,
+  sort_result: bool,
+) -> None:
+  try:
+    page, per_page = _normalize_maps_pagination(page, per_page)
+  except ValueError as err:
+    await interaction.followup.send(content=str(err), ephemeral=True)
+    return
+
+  command = f"ultrahc_ds_get_maps {mode}"
+
+  try:
+    response = await cs_server.exec(command)
+    _validate_rcon_response(command, response)
+    maps = _parse_server_maps_response(command, mode, response)
+  except CommandExecutionError as err:
+    logger.error(f"CS Server: {err}")
+    await interaction.followup.send(
+      content="Не удалось получить список карт с сервера. Проверьте логи.",
+      ephemeral=True,
+    )
+    return
+
+  if sort_result:
+    maps = sorted(set(maps), key=str.lower)
+
+  total = len(maps)
+  if total == 0:
+    await interaction.followup.send(
+      content=f"Источник: {source_label}\nСписок карт пуст.",
+      ephemeral=True,
+    )
+    return
+
+  total_pages = (total + per_page - 1) // per_page
+  if page > total_pages:
+    await interaction.followup.send(
+      content=f"Страница {page} недоступна. Доступно страниц: 1..{total_pages}.",
+      ephemeral=True,
+    )
+    return
+
+  start = (page - 1) * per_page
+  end = min(start + per_page, total)
+  lines = [
+    f"Источник: {source_label}",
+    f"Всего карт: {total}",
+    f"Страница {page}/{total_pages}",
+    "",
+  ]
+  lines.extend(f"{idx}. {name}" for idx, name in enumerate(maps[start:end], start=start + 1))
+
+  content = "\n".join(lines)
+  if len(content) > DISCORD_MESSAGE_SAFE_LIMIT:
+    await interaction.followup.send(
+      content=(
+        "Ответ не помещается в лимит Discord для текущего per_page. "
+        "Уменьшите per_page (например, до 20)."
+      ),
+      ephemeral=True,
+    )
+    return
+
+  await interaction.followup.send(content=content, ephemeral=True)
 
 # !SECTION
 
@@ -267,6 +410,38 @@ async def cmd_sync_maps(data):
   except CommandExecutionError as err:
     logger.error(f"CS Server: {err}")
     await interaction.followup.send(content="Не удалось", ephemeral=True)
+
+
+# -- server_maps
+@observer.subscribe(Event.BC_CS_SERVER_MAPS)
+@require_connection
+async def cmd_server_maps(data):
+  interaction: discord.Interaction = data[Param.Interaction]
+
+  await _reply_server_maps(
+    interaction,
+    mode="rotation",
+    source_label="CS server (active rotation)",
+    page=int(data.get("page", MAPS_PAGE_DEFAULT)),
+    per_page=int(data.get("per_page", MAPS_PER_PAGE_DEFAULT)),
+    sort_result=False,
+  )
+
+
+# -- server_maps_installed
+@observer.subscribe(Event.BC_CS_SERVER_MAPS_INSTALLED)
+@require_connection
+async def cmd_server_maps_installed(data):
+  interaction: discord.Interaction = data[Param.Interaction]
+
+  await _reply_server_maps(
+    interaction,
+    mode="installed",
+    source_label="CS server (maps folder)",
+    page=int(data.get("page", MAPS_PAGE_DEFAULT)),
+    per_page=int(data.get("per_page", MAPS_PER_PAGE_DEFAULT)),
+    sort_result=True,
+  )
 
 # -- map_change
 @observer.subscribe(Event.BC_CS_MAP_CHANGE)

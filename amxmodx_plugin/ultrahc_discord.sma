@@ -1,4 +1,5 @@
 #include <amxmodx>
+#include <file>
 #include <ultrahc_chat_manager>
 #include <easy_http>
 #include <sqlx>
@@ -27,6 +28,14 @@
 #define INFO_PUSH_HEARTBEAT_SEC 30.0
 #define TASK_INFO_PUSH 60001
 #define TASK_INFO_HEARTBEAT 60002
+#define MAP_QUERY_MODE_LENGTH 32
+#define MAP_ENTRY_LENGTH 128
+
+#define MAPS_OUTPUT_BEGIN "ULTRAHC_MAPS_BEGIN"
+#define MAPS_OUTPUT_END "ULTRAHC_MAPS_END"
+#define MAPS_OUTPUT_ERROR "ULTRAHC_MAPS_ERROR"
+
+new const MAP_ROTATION_FILE[] = "maps_ultrahc.ini";
 
 #define CVARS_LENGTH 128
 
@@ -69,6 +78,7 @@ public plugin_init() {
 	register_concmd("ultrahc_ds_send_msg", "HookMsgFromDs");
 	register_concmd("ultrahc_ds_change_map", "HookChangeMapCmd");
 	register_concmd("ultrahc_ds_kick_player", "HookKickPlayerCmd");
+	register_concmd("ultrahc_ds_get_maps", "HookGetMapsCmd");
 	
 	register_concmd("ultrahc_ds_get_info", "HookGetinfoCmd");
 	register_event("DeathMsg", "OnDeathMsg", "a");
@@ -417,6 +427,118 @@ public HookGetinfoCmd() {
 
 //-----------------------------------------
 
+PrintMapsBegin(const mode[]) {
+	server_print("%s %s", MAPS_OUTPUT_BEGIN, mode);
+}
+
+PrintMapsEnd(count) {
+	server_print("%s %i", MAPS_OUTPUT_END, count);
+}
+
+bool:IsBspFilename(const file_name[]) {
+	new name_len = strlen(file_name);
+	if(name_len <= 4) return false;
+
+	new ext_pos = containi(file_name, ".bsp");
+	if(ext_pos < 0) return false;
+
+	return (ext_pos == (name_len - 4));
+}
+
+PrintRotationMapList() {
+	PrintMapsBegin("rotation");
+
+	#if defined _map_manager_core_included
+		new file_path[256];
+		get_localinfo("amxx_configsdir", file_path, charsmax(file_path));
+		formatex(file_path, charsmax(file_path), "%s/%s", file_path, MAP_ROTATION_FILE);
+
+		new file = fopen(file_path, "rt");
+		if(!file) {
+			server_print("%s rotation_file_unavailable", MAPS_OUTPUT_ERROR);
+			PrintMapsEnd(0);
+			return;
+		}
+
+		new line[MAP_ENTRY_LENGTH];
+		new map_name[64];
+		new count = 0;
+		while(!feof(file)) {
+			fgets(file, line, charsmax(line));
+			trim(line);
+
+			if(!line[0]) continue;
+			if(line[0] == ';' || line[0] == '#') continue;
+			if(line[0] == '/' && line[1] == '/') continue;
+
+			parse(line, map_name, charsmax(map_name));
+			if(!map_name[0]) continue;
+
+			server_print("%s", map_name);
+			count++;
+		}
+
+		fclose(file);
+		PrintMapsEnd(count);
+	#else
+		server_print("%s map_manager_not_enabled", MAPS_OUTPUT_ERROR);
+		PrintMapsEnd(0);
+	#endif
+}
+
+PrintInstalledMapList() {
+	PrintMapsBegin("installed");
+
+	new entry_name[MAP_ENTRY_LENGTH];
+	new FileType:file_type = FileType_Unknown;
+	new dir_handle = open_dir("maps", entry_name, charsmax(entry_name), file_type);
+
+	if(!dir_handle) {
+		server_print("%s maps_dir_unavailable", MAPS_OUTPUT_ERROR);
+		PrintMapsEnd(0);
+		return;
+	}
+
+	new count = 0;
+	do {
+		if(file_type != FileType_File) continue;
+		if(!IsBspFilename(entry_name)) continue;
+
+		entry_name[strlen(entry_name) - 4] = 0;
+		server_print("%s", entry_name);
+		count++;
+	} while(next_file(dir_handle, entry_name, charsmax(entry_name), file_type));
+
+	close_dir(dir_handle);
+	PrintMapsEnd(count);
+}
+
+public HookGetMapsCmd() {
+	new mode[MAP_QUERY_MODE_LENGTH];
+	read_argv(1, mode, charsmax(mode));
+
+	trim(mode);
+	remove_quotes(mode);
+
+	if(!mode[0] || equali(mode, "rotation")) {
+		PrintRotationMapList();
+		return PLUGIN_HANDLED;
+	}
+
+	if(equali(mode, "installed")) {
+		PrintInstalledMapList();
+		return PLUGIN_HANDLED;
+	}
+
+	PrintMapsBegin("invalid");
+	server_print("%s unsupported_mode", MAPS_OUTPUT_ERROR);
+	PrintMapsEnd(0);
+
+	return PLUGIN_HANDLED;
+}
+
+//-----------------------------------------
+
 public HookKickPlayerCmd() {
 	new cmd_text[150];
 	read_args(cmd_text, charsmax(cmd_text));
@@ -443,10 +565,10 @@ public HookMsgFromDs() {
 //-----------------------------------------
 
 #if defined _map_manager_core_included
-	new file_name[] = "maps_ultrahc.ini";
-
 	public plugin_cfg() {
-		mapm_load_maplist(file_name)
+		new map_file[32];
+		copy(map_file, charsmax(map_file), MAP_ROTATION_FILE);
+		mapm_load_maplist(map_file)
 	}
 
 	public HookReloadMapList() {
@@ -458,7 +580,7 @@ public HookMsgFromDs() {
 	public SQLHandlerForMapList(failstate, Handle:query, error[], errnum, data[], size, queuetime) {
 		new file_path[256]; 
 		get_localinfo("amxx_configsdir", file_path, charsmax(file_path));
-		formatex(file_path, charsmax(file_path), "%s/%s", file_path, file_name);
+		formatex(file_path, charsmax(file_path), "%s/%s", file_path, MAP_ROTATION_FILE);
 		
 		new file = fopen(file_path, "w");
 		

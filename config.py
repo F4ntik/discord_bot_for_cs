@@ -48,7 +48,16 @@ MAP_FTP_PASSWORD = ""
 MAP_FTP_PASSIVE = True
 MAP_FTP_USE_TLS = True
 MAP_FTP_TIMEOUT_SEC = 30
+# Удалённые пути на FTP/FTPS (абсолютные пути на стороне game-сервера).
+# Пример: "/cstrike/maps", "/home/cs/serverfiles/cstrike/maps"
 MAP_REMOTE_MAPS_DIR = "/cstrike/maps"
+MAP_REMOTE_BASE_DIR = "/cstrike"
+MAP_REMOTE_MODELS_DIR = "/cstrike/models"
+MAP_REMOTE_SOUND_DIR = "/cstrike/sound"
+MAP_REMOTE_SPRITES_DIR = "/cstrike/sprites"
+MAP_REMOTE_GFX_DIR = "/cstrike/gfx"
+MAP_REMOTE_OVERVIEWS_DIR = "/cstrike/overviews"
+MAP_REMOTE_RESOURCE_DIR = "/cstrike/resource"
 MAP_INSTALL_SYNC_TIMEOUT_SEC = 12
 MAP_INSTALL_MAX_FILE_MB = 200
 MAP_INSTALL_WORKDIR = "uploaded_maps"

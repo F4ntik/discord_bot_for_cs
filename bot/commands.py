@@ -36,11 +36,13 @@ async def cmd_help(interaction: discord.Interaction):
       ("ban_offline", " <steam_id> <minutes> [reason]", "Блокирует игрока, который ранее был на сервере (нужны права manage_messages).", False),
       ("unban", " <steam_id>", "Разблокирует игрока по Steam ID (нужны права manage_messages).", False),
       ("sync_maps", "", "Синхронизирует список карт между MySQL, Redis и сервером (нужны права manage_messages).", False),
+      ("server_maps", " [page] [per_page]", "Показывает активную ротацию карт с CS-сервера (нужны права manage_messages).", False),
+      ("server_maps_installed", " [page] [per_page]", "Показывает установленные .bsp карты из папки maps на CS-сервере (нужны права manage_messages).", False),
       ("map_change", " <map>", "Меняет текущую карту на сервере (нужны права manage_messages).", False),
       (
         "map_install",
         " <file> [map_name] [min_players] [max_players] [add_to_rotation] [priority]",
-        "Загружает карту (.bsp/.zip), отправляет на FTP/FTPS и опционально добавляет в ротацию.",
+        "Загружает карту или архив ресурсов (.bsp/.zip), отправляет на FTP/FTPS и опционально добавляет в ротацию.",
         False,
       ),
       ("map_add", " <map_name> [activated] [min_players] [max_players] [priority]", "Добавляет карту в базу данных (нужны права manage_messages).", False),
@@ -212,6 +214,38 @@ async def cmd_sync_maps(interaction: discord.Interaction):
     Param.Interaction: interaction,
   })
 
+# -- /server_maps
+@bot.tree.command(name="server_maps", description="Показывает активную ротацию карт с игрового сервера")
+@discord.app_commands.describe(
+  page="Номер страницы (начиная с 1)",
+  per_page="Количество карт на странице (1-50)"
+)
+@commands.has_permissions(manage_messages=True)
+async def cmd_server_maps(interaction: discord.Interaction, page: int = 1, per_page: int = 20):
+  await interaction.response.defer(thinking=True, ephemeral=True)
+
+  await observer.notify(Event.BC_CS_SERVER_MAPS, {
+    Param.Interaction: interaction,
+    "page": page,
+    "per_page": per_page,
+  })
+
+# -- /server_maps_installed
+@bot.tree.command(name="server_maps_installed", description="Показывает .bsp карты из папки maps на игровом сервере")
+@discord.app_commands.describe(
+  page="Номер страницы (начиная с 1)",
+  per_page="Количество карт на странице (1-50)"
+)
+@commands.has_permissions(manage_messages=True)
+async def cmd_server_maps_installed(interaction: discord.Interaction, page: int = 1, per_page: int = 20):
+  await interaction.response.defer(thinking=True, ephemeral=True)
+
+  await observer.notify(Event.BC_CS_SERVER_MAPS_INSTALLED, {
+    Param.Interaction: interaction,
+    "page": page,
+    "per_page": per_page,
+  })
+
 # -- /map_change
 @bot.tree.command(name="map_change", description="Меняет карту")
 @discord.app_commands.describe(map="Название карты")
@@ -225,7 +259,7 @@ async def cmd_map_change(interaction: discord.Interaction, map: str):
     "map": map
   })
 
-@bot.tree.command(name="map_install", description="Устанавливает карту (.bsp/.zip) через FTP/FTPS")
+@bot.tree.command(name="map_install", description="Устанавливает карту/архив ресурсов (.bsp/.zip) через FTP/FTPS")
 @discord.app_commands.describe(
   file="Файл карты (.bsp или .zip)",
   map_name="Имя карты без расширения",
