@@ -11,12 +11,46 @@ BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
 
 # Репозиторий по умолчанию (если REPO_URL не задан)
 REPO_URL="${REPO_URL:-https://github.com/F4ntik/discord_bot_for_cs}"
+BRANCH_NAME=""
 
 # Python/venv
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV="$PROJECT_DIR/venv"
 REQ="$PROJECT_DIR/requirements.txt"
 MERGE_CONFIG_DEFAULTS="${MERGE_CONFIG_DEFAULTS:-1}"
+
+print_usage() {
+  cat <<EOF
+Использование: ./updater.sh [опции]
+
+Опции:
+  -b, --branch <name>  Обновить проект из указанной ветки
+  -h, --help           Показать справку
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -b|--branch)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "[updater] Ошибка: для $1 нужно указать имя ветки"
+        print_usage
+        exit 1
+      fi
+      BRANCH_NAME="$2"
+      shift 2
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    *)
+      echo "[updater] Ошибка: неизвестный аргумент: $1"
+      print_usage
+      exit 1
+      ;;
+  esac
+done
 
 # --- Временная папка ---
 TMP_DIR="$(mktemp -d)"
@@ -36,8 +70,13 @@ rsync -a --delete \
   --exclude 'logs' \
   "$PROJECT_DIR"/ "$BACKUP_DIR"/
 
-echo "[updater] Загрузка репозитория $REPO_URL"
-git clone --depth 1 "$REPO_URL" "$TMP_DIR/repo"
+if [[ -n "$BRANCH_NAME" ]]; then
+  echo "[updater] Загрузка репозитория $REPO_URL (ветка: $BRANCH_NAME)"
+  git clone --depth 1 --branch "$BRANCH_NAME" "$REPO_URL" "$TMP_DIR/repo"
+else
+  echo "[updater] Загрузка репозитория $REPO_URL"
+  git clone --depth 1 "$REPO_URL" "$TMP_DIR/repo"
+fi
 
 echo "[updater] Обновление файлов проекта"
 rsync -a --delete \
