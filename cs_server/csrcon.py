@@ -81,6 +81,8 @@ class CSRCON:
       try:
         return self.cs_server.execute(command)
       except Exception as e:
+        self.cs_server.disconnect()
+        self.connected = False
         raise CommandExecutionError(f"Ошибка выполнения команды: {str(e)}")
 
   # -- exec_fresh()

@@ -64,6 +64,14 @@ def _validate_rcon_response(command: str, response: str) -> None:
 def require_connection(func) -> callable:
 
   async def wrapper(*args, **kwargs) -> callable:
+    if not cs_server.connected:
+      try:
+        await cs_server.connect_to_server()
+        _mark_connected()
+        logger.info("CS Server: auto-reconnected before command execution")
+      except CSConnectionError as err:
+        logger.error(f"CS Server: auto-reconnect failed: {err}")
+
     if cs_server.connected:
       return await func(*args, **kwargs)
 
@@ -287,8 +295,15 @@ async def _reply_server_maps(
   command = f"ultrahc_ds_push_maps \"{safe_mode}\" \"{safe_request_id}\""
 
   try:
+    logger.info(
+      "CS Server: sending maps snapshot trigger mode=%s request_id=%s",
+      mode,
+      request_id,
+    )
     response = await cs_server.exec(command)
     _validate_rcon_response(command, response)
+    if response:
+      logger.info("CS Server: maps snapshot trigger response=%s", str(response)[:200])
   except CommandExecutionError as err:
     await _pop_maps_snapshot_request(request_id)
     logger.error(f"CS Server: {err}")
