@@ -10,7 +10,7 @@
 #pragma dynamic 32768
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.4.21"
+#define PLUGIN_VERSION 	"0.5.1"
 #define PLUGIN_AUTHOR 	"Asura, Mep3ocTb"
 
 //-----------------------------------------
