@@ -9,7 +9,7 @@
 #pragma dynamic 32768
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.3-stable-20260217-1"
+#define PLUGIN_VERSION 	"0.4.13"
 #define PLUGIN_AUTHOR 	"Asura"
 
 //-----------------------------------------
@@ -80,6 +80,9 @@ new bool:g_info_request_in_flight = false;
 new Float:g_info_last_send_time = 0.0;
 new g_info_skip_inflight = 0;
 new g_info_skip_rate = 0;
+new g_round_number = 0;
+new g_score_t = 0;
+new g_score_ct = 0;
 
 // new big_string[5000];
 
@@ -102,6 +105,8 @@ public plugin_init() {
 	#if INFO_WEBHOOK_ENABLED
 		register_event("DeathMsg", "OnDeathMsg", "a");
 		register_event("TeamInfo", "OnTeamInfo", "a");
+		register_event("TeamScore", "OnTeamScore", "a");
+		register_logevent("OnRoundStart", 2, "1=Round_Start");
 	#endif
 	
 	#if defined _map_manager_core_included
@@ -116,6 +121,9 @@ public plugin_init() {
 	bind_pcvar_string(create_cvar("ultrahc_ds_sql_user", ""), __cvar_str_list[_sql_user], CVARS_LENGTH);
 	bind_pcvar_string(create_cvar("ultrahc_ds_sql_pass", ""), __cvar_str_list[_sql_pass], CVARS_LENGTH);
 	bind_pcvar_string(create_cvar("ultrahc_ds_sql_db", ""), __cvar_str_list[_sql_db], CVARS_LENGTH);
+	g_round_number = 0;
+	g_score_t = 0;
+	g_score_ct = 0;
 
 	#if INFO_WEBHOOK_ENABLED
 		set_task(INFO_PUSH_HEARTBEAT_SEC, "InfoHeartbeatTask", TASK_INFO_HEARTBEAT, "", 0, "b");
@@ -355,6 +363,25 @@ public OnTeamInfo() {
 	ScheduleInfoPush();
 }
 
+public OnTeamScore() {
+	new team_name[16];
+	read_data(1, team_name, charsmax(team_name));
+
+	new score = read_data(2);
+	if(team_name[0] == 'T') {
+		g_score_t = score;
+	} else if(team_name[0] == 'C') {
+		g_score_ct = score;
+	}
+
+	ScheduleInfoPush();
+}
+
+public OnRoundStart() {
+	g_round_number++;
+	ScheduleInfoPush();
+}
+
 ScheduleInfoPush(Float:delay = INFO_PUSH_DEBOUNCE_SEC) {
 	#if !INFO_WEBHOOK_ENABLED
 		return;
@@ -413,6 +440,9 @@ SendInfoWebhook() {
   
 	new json_len = 0;
 	new bool:payload_truncated = false;
+	new map_timeleft_sec = get_timeleft();
+	new bomb_carrier_steam_id[64];
+	GetBombCarrierSteamId(bomb_carrier_steam_id, charsmax(bomb_carrier_steam_id));
   
 	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "{")) {
 		server_print("[ultrahc_discord] info webhook build failed: cannot start json");
@@ -484,8 +514,8 @@ SendInfoWebhook() {
 				required += 1;
 			}
 
-			// Резервируем место под закрытие массива/объекта и max_players.
-			if(json_len + required + 64 >= sizeof(g_info_json)) {
+			// Резервируем место под закрытие массива/объекта и служебные поля.
+			if(json_len + required + 192 >= sizeof(g_info_json)) {
 				payload_truncated = true;
 				break;
 			}
@@ -515,8 +545,33 @@ SendInfoWebhook() {
 		return;
 	}
 	
-	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"max_players^":%i", MaxClients)) {
+	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"max_players^":%i,", MaxClients)) {
 		server_print("[ultrahc_discord] info webhook build failed: cannot append max_players");
+		return;
+	}
+
+	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"map_timeleft_sec^":%i,", map_timeleft_sec)) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append map_timeleft_sec");
+		return;
+	}
+
+	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"round_number^":%i,", g_round_number)) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append round_number");
+		return;
+	}
+
+	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"score_t^":%i,", g_score_t)) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append score_t");
+		return;
+	}
+
+	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"score_ct^":%i,", g_score_ct)) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append score_ct");
+		return;
+	}
+
+	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"bomb_carrier_steam_id^":^"%s^"", bomb_carrier_steam_id)) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append bomb_carrier_steam_id");
 		return;
 	}
   
@@ -534,6 +589,21 @@ SendInfoWebhook() {
 	g_info_request_in_flight = true;
 	g_info_last_send_time = now;
 	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPCompleteInfo", options_id)
+}
+
+stock GetBombCarrierSteamId(output[], output_len) {
+	output[0] = '^0';
+
+	for(new id = 1; id <= MaxClients; id++) {
+		if(!is_user_connected(id) || is_user_hltv(id)) continue;
+		if(get_user_team(id) != _:CS_TEAM_T) continue;
+		if(!user_has_weapon(id, CSW_C4)) continue;
+
+		get_user_authid(id, output, output_len);
+		replace_all(output, output_len, "\\", "\\\\");
+		replace_all(output, output_len, "^"", "'");
+		return;
+	}
 }
 
 //-----------------------------------------
