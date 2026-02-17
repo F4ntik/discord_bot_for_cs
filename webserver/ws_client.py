@@ -72,6 +72,8 @@ def format_info_message(
   score_ct=None,
   bomb_carrier_steam_id=None,
   bomb_carrier_slot=None,
+  planted_bomb_steam_id=None,
+  planted_bomb_slot=None,
 ):
   current_players = current_players if isinstance(current_players, list) else []
   player_count = (
@@ -86,6 +88,8 @@ def format_info_message(
   map_timeleft = _safe_int(map_timeleft_sec, -1)
   bomb_carrier_steam_id = str(bomb_carrier_steam_id or "")
   bomb_carrier_slot = _safe_int(bomb_carrier_slot, -1)
+  planted_bomb_steam_id = str(planted_bomb_steam_id or "")
+  planted_bomb_slot = _safe_int(planted_bomb_slot, -1)
   team_players = {1: [], 2: [], 3: []}
 
   for player in current_players:
@@ -103,6 +107,15 @@ def format_info_message(
     player_slot = _safe_int(player.get('slot'), -1)
 
     bomb_suffix = ""
+    is_planted_by_player = False
+    if planted_bomb_slot > 0:
+      is_planted_by_player = player_slot == planted_bomb_slot
+    elif planted_bomb_steam_id and player_steam_id:
+      is_planted_by_player = (
+        planted_bomb_steam_id.upper() != "BOT"
+        and player_steam_id == planted_bomb_steam_id
+      )
+
     is_bomb_carrier = False
     if bomb_carrier_slot > 0:
       is_bomb_carrier = player_slot == bomb_carrier_slot
@@ -114,7 +127,9 @@ def format_info_message(
         and player_steam_id == bomb_carrier_steam_id
       )
 
-    if is_bomb_carrier:
+    if is_planted_by_player:
+      bomb_suffix = f" {Color.Green}(planted bomb){Color.Default}"
+    elif is_bomb_carrier:
       bomb_suffix = f" {Color.Green}(bomb){Color.Default}"
 
     if team in team_players:
@@ -267,6 +282,8 @@ async def handle_info(data):
     score_ct = data.get('score_ct')
     bomb_carrier_steam_id = data.get('bomb_carrier_steam_id')
     bomb_carrier_slot = data.get('bomb_carrier_slot')
+    planted_bomb_steam_id = data.get('planted_bomb_steam_id')
+    planted_bomb_slot = data.get('planted_bomb_slot')
 
     formatted_info = format_info_message(
       map_name,
@@ -279,16 +296,20 @@ async def handle_info(data):
       score_ct=score_ct,
       bomb_carrier_steam_id=bomb_carrier_steam_id,
       bomb_carrier_slot=bomb_carrier_slot,
+      planted_bomb_steam_id=planted_bomb_steam_id,
+      planted_bomb_slot=planted_bomb_slot,
     )
 
     logger.info(
-      "Webhook info received: map=%s players=%s/%s round=%s score_t=%s score_ct=%s",
+      "Webhook info received: map=%s players=%s/%s round=%s score_t=%s score_ct=%s bomb_slot=%s planted_slot=%s",
       map_name,
       player_count if isinstance(player_count, int) else (len(current_players) if isinstance(current_players, list) else "?"),
       max_players,
       round_number,
       score_t,
       score_ct,
+      bomb_carrier_slot,
+      planted_bomb_slot,
     )
 
     await observer.notify(Event.WBH_INFO, {
