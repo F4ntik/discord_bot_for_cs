@@ -9,7 +9,7 @@
 #pragma dynamic 32768
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.4.13"
+#define PLUGIN_VERSION 	"0.4.14"
 #define PLUGIN_AUTHOR 	"Asura"
 
 //-----------------------------------------
@@ -442,7 +442,8 @@ SendInfoWebhook() {
 	new bool:payload_truncated = false;
 	new map_timeleft_sec = get_timeleft();
 	new bomb_carrier_steam_id[64];
-	GetBombCarrierSteamId(bomb_carrier_steam_id, charsmax(bomb_carrier_steam_id));
+	new bomb_carrier_slot = 0;
+	GetBombCarrier(bomb_carrier_steam_id, charsmax(bomb_carrier_steam_id), bomb_carrier_slot);
   
 	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "{")) {
 		server_print("[ultrahc_discord] info webhook build failed: cannot start json");
@@ -495,7 +496,8 @@ SendInfoWebhook() {
 			new player_json_len = formatex(
 				g_info_player_json,
 				charsmax(g_info_player_json),
-				"{^"name^":^"%s^",^"steam_id^":^"%s^",^"stats^":[%i, %i, %i]}",
+				"{^"slot^":%i,^"name^":^"%s^",^"steam_id^":^"%s^",^"stats^":[%i, %i, %i]}",
+				id,
 				g_info_user_name,
 				g_info_user_auth,
 				user_frags,
@@ -570,7 +572,7 @@ SendInfoWebhook() {
 		return;
 	}
 
-	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"bomb_carrier_steam_id^":^"%s^"", bomb_carrier_steam_id)) {
+	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"bomb_carrier_steam_id^":^"%s^",^"bomb_carrier_slot^":%i", bomb_carrier_steam_id, bomb_carrier_slot)) {
 		server_print("[ultrahc_discord] info webhook build failed: cannot append bomb_carrier_steam_id");
 		return;
 	}
@@ -591,19 +593,35 @@ SendInfoWebhook() {
 	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPCompleteInfo", options_id)
 }
 
-stock GetBombCarrierSteamId(output[], output_len) {
+stock GetBombCarrier(output[], output_len, &bomb_carrier_slot) {
 	output[0] = '^0';
+	bomb_carrier_slot = 0;
 
 	for(new id = 1; id <= MaxClients; id++) {
 		if(!is_user_connected(id) || is_user_hltv(id)) continue;
 		if(get_user_team(id) != _:CS_TEAM_T) continue;
-		if(!user_has_weapon(id, CSW_C4)) continue;
+		if(!HasUserWeaponC4(id)) continue;
 
+		bomb_carrier_slot = id;
 		get_user_authid(id, output, output_len);
 		replace_all(output, output_len, "\\", "\\\\");
 		replace_all(output, output_len, "^"", "'");
 		return;
 	}
+}
+
+stock bool:HasUserWeaponC4(player_id) {
+	new weapons[32];
+	new weapons_count = 0;
+	get_user_weapons(player_id, weapons, weapons_count);
+
+	for(new i = 0; i < weapons_count; i++) {
+		if(weapons[i] == CSW_C4) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 //-----------------------------------------
