@@ -118,7 +118,7 @@ chmod +x restore.sh
 Триггеры отправки `type=info`:
 - подключение игрока;
 - отключение игрока;
-- события `DeathMsg`, `TeamInfo`, `TeamScore`, `Round_Start` и бомбовые игровые события (`Got_The_Bomb`, `Dropped_The_Bomb`, `Spawned_With_The_Bomb`);
+- события `DeathMsg`, `TeamInfo`, `TeamScore`, `Round_Start` и бомбовые игровые события (`Got_The_Bomb`, `Dropped_The_Bomb`, `Spawned_With_The_Bomb`, `Planted_The_Bomb`);
 - периодический heartbeat (по умолчанию раз в 30 секунд), чтобы статус не замирал даже при отсутствии игровых событий.
 - при большом числе игроков payload автоматически ограничивается по размеру, чтобы JSON webhook оставался валидным.
 
@@ -128,12 +128,17 @@ chmod +x restore.sh
 - `score_t` и `score_ct` — счёт команд T/CT;
 - `bomb_carrier_steam_id` — `steam_id` игрока, который несёт C4 (если есть).
 - `bomb_carrier_slot` — слот игрока-носителя C4 (используется как приоритетный идентификатор, чтобы корректно отмечать бомбу у ботов).
+- `planted_bomb_steam_id` — `steam_id` игрока, который установил C4 в текущем раунде.
+- `planted_bomb_slot` — слот игрока, который установил C4 (приоритетный идентификатор для корректной работы с ботами).
 
 Формат статуса в Discord теперь включает:
 - строку `До конца карты: mm:ss` (формируется из `map_timeleft_sec`);
 - строку `Номер раунда: N`;
 - заголовки команд в виде `Terrorists(x):` и `Counter-Terrorists(y):`;
 - зелёную пометку ` (bomb)` после K/D у игрока-носителя C4.
+- зелёную пометку ` (planted bomb)` у игрока, который поставил C4; метка держится до конца раунда и имеет приоритет над ` (bomb)`.
+- Для устойчивости слот плантера определяется по `userid` из лог-события `Planted_The_Bomb` (с маппингом через `find_player("k", userid)`), а также дублируется через forward `bomb_planted(planter)` при наличии CSX.
+- На серверах с нестабильным `register_logevent` дополнительно используется fallback через `plugin_log` (по полному тексту log-line) для `Planted_The_Bomb` и других бомбовых событий.
 
 Постоянный RCON polling статуса (`ultrahc_ds_get_info` по таймеру из бота) отключён. RCON-соединение теперь используется для управляющих команд из Discord (`/connect_to_cs`, `/rcon`, модерация и т.д.), а статус-канал поддерживается webhook-потоком из CS.
 ### Безопасность webhook
