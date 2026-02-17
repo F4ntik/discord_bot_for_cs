@@ -16,6 +16,8 @@ from webserver.webhook_type import normalize_webhook_type, normalize_webhook_typ
   [
     ("info", "info"),
     ("message", "message"),
+    ("maps_snapshot", "maps_snapshot"),
+    ("maps\n_snapshot", "maps_snapshot"),
     (" info ", "info"),
     ("mes\nsage", "message"),
     ("in\x00fo", "info"),
@@ -42,6 +44,8 @@ def test_normalize_webhook_type(raw_type, expected):
     ("1", "info"),
     (2, "message"),
     ("2", "message"),
+    (3, "maps_snapshot"),
+    ("3", "maps_snapshot"),
     (0, None),
     ("0", None),
     ("abc", None),

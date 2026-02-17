@@ -60,6 +60,42 @@ def _format_mmss(seconds):
   minutes, secs = divmod(seconds, 60)
   return f"{minutes:02d}:{secs:02d}"
 
+
+def parse_maps_snapshot_payload(data):
+  request_id = str(data.get("request_id", "")).strip()
+  mode = str(data.get("mode", "")).strip().lower()
+  maps_raw = data.get("maps")
+
+  if not request_id or len(request_id) > 64:
+    return None, "bad_request_id"
+
+  if mode not in ("rotation", "installed"):
+    return None, "bad_mode"
+
+  if not isinstance(maps_raw, list):
+    return None, "bad_maps"
+
+  maps = []
+  for map_name in maps_raw:
+    if map_name is None:
+      continue
+    normalized_name = str(map_name).strip()
+    if not normalized_name:
+      continue
+    maps.append(normalized_name)
+
+  total = data.get("total", len(maps))
+  total = _safe_int(total, len(maps))
+  if total < 0:
+    total = len(maps)
+
+  return {
+    "request_id": request_id,
+    "mode": mode,
+    "maps": maps,
+    "total": total,
+  }, None
+
 # -- format_info_message
 def format_info_message(
   map_name,
@@ -203,6 +239,27 @@ def check_api_key(request, request_url: str = "<unknown>"):
   )
   return False
 
+async def handle_maps_snapshot(data):
+  payload, error_code = parse_maps_snapshot_payload(data)
+  if payload is None:
+    logger.error(
+      "Webhook maps_snapshot bad payload: error=%s request_id=%r mode=%r maps_type=%s",
+      error_code,
+      data.get("request_id"),
+      data.get("mode"),
+      type(data.get("maps")).__name__,
+    )
+    return False
+
+  logger.info(
+    "Webhook maps_snapshot received: request_id=%s mode=%s total=%s",
+    payload["request_id"],
+    payload["mode"],
+    payload["total"],
+  )
+  await observer.notify(Event.WBH_MAPS_SNAPSHOT, payload)
+  return True
+
 # !SECTION
 
 # SECTION Web Hooks
@@ -325,6 +382,7 @@ async def handle_info(data):
 class WebHooksType(Enum):
   Message = 'message'
   Info = 'info'
+  MapsSnapshot = 'maps_snapshot'
 
   # Deprecated
   # Notify = 'notify' 
@@ -424,6 +482,9 @@ async def handle_webhook(request: web.Request):
       logger.exception(f"Ошибка обработки webhook message: {err}")
   elif message_type == WebHooksType.Info.value:
     await handle_info(data)
+  elif message_type == WebHooksType.MapsSnapshot.value:
+    if not await handle_maps_snapshot(data):
+      return web.Response(text="Bad Request: bad_maps_snapshot", status=400)
 
   return web.Response(text='OK')
 

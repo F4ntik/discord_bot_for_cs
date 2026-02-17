@@ -37,6 +37,7 @@ CS_CONNECT_MIN_INTERVAL = 2
 # После перехода на push-модель статуса (события + heartbeat из AMX) они не используются.
 CS_INFO_WEBHOOK_TIMEOUT = 12
 CS_INFO_WEBHOOK_MAX_MISSES = 3
+CS_MAPS_SNAPSHOT_TIMEOUT_SEC = 6
 #-------------------------------------------------------------------
 
 # Параметры установки карт через /map_install (FTP/FTPS + опциональная ротация)

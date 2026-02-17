@@ -10,7 +10,7 @@
 #pragma dynamic 32768
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.4.20"
+#define PLUGIN_VERSION 	"0.4.21"
 #define PLUGIN_AUTHOR 	"Asura, Mep3ocTb"
 
 //-----------------------------------------
@@ -28,8 +28,11 @@
 #define DS_SEND_MESSAGE_LENGTH 192
 #define WEBHOOK_TYPE_CODE_INFO 1
 #define WEBHOOK_TYPE_CODE_MESSAGE 2
+#define WEBHOOK_TYPE_CODE_MAPS_SNAPSHOT 3
 #define INFO_WEBHOOK_ENABLED 1
 #define INFO_JSON_LENGTH 4096
+#define MAPS_SNAPSHOT_JSON_LENGTH 16384
+#define MAPS_SNAPSHOT_REQUEST_ID_LENGTH 65
 #define INFO_PUSH_DEBOUNCE_SEC 1.0
 #define INFO_PUSH_HEARTBEAT_SEC 30.0
 #define INFO_MIN_POST_INTERVAL_SEC 0.8
@@ -77,6 +80,8 @@ new g_info_json[INFO_JSON_LENGTH];
 new g_info_player_json[384];
 new g_info_user_name[MAX_NAME_LENGTH];
 new g_info_user_auth[64];
+new g_maps_snapshot_json[MAPS_SNAPSHOT_JSON_LENGTH];
+new g_maps_snapshot_entry_json[MAP_ENTRY_LENGTH * 2];
 new bool:g_info_request_in_flight = false;
 new Float:g_info_last_send_time = 0.0;
 new g_info_skip_inflight = 0;
@@ -103,6 +108,7 @@ public plugin_init() {
 	register_concmd("ultrahc_ds_change_map", "HookChangeMapCmd");
 	register_concmd("ultrahc_ds_kick_player", "HookKickPlayerCmd");
 	register_concmd("ultrahc_ds_get_maps", "HookGetMapsCmd");
+	register_concmd("ultrahc_ds_push_maps", "HookPushMapsCmd");
 	
 	register_concmd("ultrahc_ds_get_info", "HookGetinfoCmd");
 	#if INFO_WEBHOOK_ENABLED
@@ -831,6 +837,19 @@ public HTTPCompleteInfo(EzHttpRequest:request_id) {
 	server_print("Response data(info): %s", data);
 }
 
+public HTTPCompleteMaps(EzHttpRequest:request_id) {
+	if (ezhttp_get_error_code(request_id) != EZH_OK) {
+      new error[64];
+      ezhttp_get_error_message(request_id, error, charsmax(error));
+      server_print("Response error(maps): %s", error);
+      return;
+  }
+
+	new data[128];
+	ezhttp_get_data(request_id, data, charsmax(data));
+	server_print("Response data(maps): %s", data);
+}
+
 //-----------------------------------------
 
 public HookChangeMapCmd() {
@@ -875,6 +894,183 @@ bool:IsBspFilename(const file_name[]) {
 	if(ext_pos < 0) return false;
 
 	return (ext_pos == (name_len - 4));
+}
+
+stock bool:IsValidMapsSnapshotRequestId(const request_id[]) {
+	new request_id_len = strlen(request_id);
+	if(request_id_len <= 0 || request_id_len >= MAPS_SNAPSHOT_REQUEST_ID_LENGTH) {
+		return false;
+	}
+
+	for(new i = 0; i < request_id_len; i++) {
+		new ch = request_id[i];
+		if((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
+			continue;
+		}
+		if(ch == '-' || ch == '_') {
+			continue;
+		}
+		return false;
+	}
+
+	return true;
+}
+
+stock bool:TryAppendMapNameToJson(json[], json_size, &json_len, const map_name[], &maps_count) {
+	copy(g_maps_snapshot_entry_json, charsmax(g_maps_snapshot_entry_json), map_name);
+	replace_all(g_maps_snapshot_entry_json, charsmax(g_maps_snapshot_entry_json), "\\", "\\\\");
+	replace_all(g_maps_snapshot_entry_json, charsmax(g_maps_snapshot_entry_json), "^"", "'");
+
+	if(maps_count > 0) {
+		if(!TryAppendJsonf(json, json_size, json_len, ",")) {
+			return false;
+		}
+	}
+
+	if(!TryAppendJsonf(json, json_size, json_len, "^"%s^"", g_maps_snapshot_entry_json)) {
+		return false;
+	}
+
+	maps_count++;
+	return true;
+}
+
+stock bool:AppendRotationMapsToJson(json[], json_size, &json_len, &maps_count, &payload_truncated) {
+	#if defined _map_manager_core_included
+		new file_path[256];
+		get_localinfo("amxx_configsdir", file_path, charsmax(file_path));
+		formatex(file_path, charsmax(file_path), "%s/%s", file_path, MAP_ROTATION_FILE);
+
+		new file = fopen(file_path, "rt");
+		if(!file) {
+			server_print("[ultrahc_discord] maps snapshot: rotation_file_unavailable");
+			return false;
+		}
+
+		new line[MAP_ENTRY_LENGTH];
+		new map_name[64];
+		while(!feof(file)) {
+			fgets(file, line, charsmax(line));
+			trim(line);
+
+			if(!line[0]) continue;
+			if(line[0] == ';' || line[0] == '#') continue;
+			if(line[0] == '/' && line[1] == '/') continue;
+
+			parse(line, map_name, charsmax(map_name));
+			if(!map_name[0]) continue;
+
+			if(!TryAppendMapNameToJson(json, json_size, json_len, map_name, maps_count)) {
+				payload_truncated = true;
+				break;
+			}
+		}
+
+		fclose(file);
+		return true;
+	#else
+		server_print("[ultrahc_discord] maps snapshot: map_manager_not_enabled");
+		return false;
+	#endif
+}
+
+stock bool:AppendInstalledMapsToJson(json[], json_size, &json_len, &maps_count, &payload_truncated) {
+	new entry_name[MAP_ENTRY_LENGTH];
+	new FileType:file_type = FileType_Unknown;
+	new dir_handle = open_dir("maps", entry_name, charsmax(entry_name), file_type);
+
+	if(!dir_handle) {
+		server_print("[ultrahc_discord] maps snapshot: maps_dir_unavailable");
+		return false;
+	}
+
+	do {
+		if(file_type != FileType_File) continue;
+		if(!IsBspFilename(entry_name)) continue;
+
+		entry_name[strlen(entry_name) - 4] = 0;
+		if(!TryAppendMapNameToJson(json, json_size, json_len, entry_name, maps_count)) {
+			payload_truncated = true;
+			break;
+		}
+	} while(next_file(dir_handle, entry_name, charsmax(entry_name), file_type));
+
+	close_dir(dir_handle);
+	return true;
+}
+
+SendMapsSnapshotWebhook(const mode[], const request_id[]) {
+	new EzHttpOptions:options_id = ezhttp_create_options();
+	if(!options_id) {
+		server_print("[ultrahc_discord] maps snapshot build failed: options alloc");
+		return;
+	}
+
+	ezhttp_option_set_header(options_id, "Authorization", __cvar_str_list[_webhook_token]);
+	ezhttp_option_set_header(options_id, "Content-Type", "application/json");
+
+	new mode_escaped[MAP_QUERY_MODE_LENGTH];
+	copy(mode_escaped, charsmax(mode_escaped), mode);
+	replace_all(mode_escaped, charsmax(mode_escaped), "\\", "\\\\");
+	replace_all(mode_escaped, charsmax(mode_escaped), "^"", "'");
+
+	new request_id_escaped[MAPS_SNAPSHOT_REQUEST_ID_LENGTH];
+	copy(request_id_escaped, charsmax(request_id_escaped), request_id);
+	replace_all(request_id_escaped, charsmax(request_id_escaped), "\\", "\\\\");
+	replace_all(request_id_escaped, charsmax(request_id_escaped), "^"", "'");
+
+	new json_len = 0;
+	if(!TryAppendJsonf(g_maps_snapshot_json, sizeof(g_maps_snapshot_json), json_len, "{")) {
+		server_print("[ultrahc_discord] maps snapshot build failed: cannot start json");
+		return;
+	}
+
+	if(!TryAppendJsonf(
+		g_maps_snapshot_json,
+		sizeof(g_maps_snapshot_json),
+		json_len,
+		"^"type^":^"maps_snapshot^",^"type_code^":%i,^"request_id^":^"%s^",^"mode^":^"%s^",^"maps^":[",
+		WEBHOOK_TYPE_CODE_MAPS_SNAPSHOT,
+		request_id_escaped,
+		mode_escaped
+	)) {
+		server_print("[ultrahc_discord] maps snapshot build failed: cannot append header");
+		return;
+	}
+
+	new maps_count = 0;
+	new bool:payload_truncated = false;
+	new bool:source_ok = false;
+	if(equali(mode, "rotation")) {
+		source_ok = AppendRotationMapsToJson(g_maps_snapshot_json, sizeof(g_maps_snapshot_json), json_len, maps_count, payload_truncated);
+	} else if(equali(mode, "installed")) {
+		source_ok = AppendInstalledMapsToJson(g_maps_snapshot_json, sizeof(g_maps_snapshot_json), json_len, maps_count, payload_truncated);
+	}
+
+	if(!source_ok) {
+		maps_count = 0;
+	}
+
+	if(!TryAppendJsonf(g_maps_snapshot_json, sizeof(g_maps_snapshot_json), json_len, "],^"total^":%i", maps_count)) {
+		server_print("[ultrahc_discord] maps snapshot build failed: cannot close maps array");
+		return;
+	}
+
+	if(payload_truncated) {
+		if(!TryAppendJsonf(g_maps_snapshot_json, sizeof(g_maps_snapshot_json), json_len, ",^"truncated^":1")) {
+			server_print("[ultrahc_discord] maps snapshot build failed: cannot append truncated flag");
+			return;
+		}
+		server_print("[ultrahc_discord] maps snapshot payload truncated: mode=%s request_id=%s maps=%d", mode, request_id, maps_count);
+	}
+
+	if(!TryAppendJsonf(g_maps_snapshot_json, sizeof(g_maps_snapshot_json), json_len, "}")) {
+		server_print("[ultrahc_discord] maps snapshot build failed: cannot close json");
+		return;
+	}
+
+	ezhttp_option_set_body(options_id, g_maps_snapshot_json);
+	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPCompleteMaps", options_id);
 }
 
 PrintRotationMapList() {
@@ -966,6 +1162,35 @@ public HookGetMapsCmd() {
 	server_print("%s unsupported_mode", MAPS_OUTPUT_ERROR);
 	PrintMapsEnd(0);
 
+	return PLUGIN_HANDLED;
+}
+
+public HookPushMapsCmd() {
+	new mode[MAP_QUERY_MODE_LENGTH];
+	new request_id[MAPS_SNAPSHOT_REQUEST_ID_LENGTH];
+	read_argv(1, mode, charsmax(mode));
+	read_argv(2, request_id, charsmax(request_id));
+
+	trim(mode);
+	remove_quotes(mode);
+	trim(request_id);
+	remove_quotes(request_id);
+
+	if(!mode[0]) {
+		copy(mode, charsmax(mode), "rotation");
+	}
+
+	if(!equali(mode, "rotation") && !equali(mode, "installed")) {
+		server_print("[ultrahc_discord] maps snapshot: unsupported mode=%s", mode);
+		return PLUGIN_HANDLED;
+	}
+
+	if(!IsValidMapsSnapshotRequestId(request_id)) {
+		server_print("[ultrahc_discord] maps snapshot: invalid request_id=%s", request_id);
+		return PLUGIN_HANDLED;
+	}
+
+	SendMapsSnapshotWebhook(mode, request_id);
 	return PLUGIN_HANDLED;
 }
 

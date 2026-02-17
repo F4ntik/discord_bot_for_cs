@@ -36,8 +36,8 @@ async def cmd_help(interaction: discord.Interaction):
       ("ban_offline", " <steam_id> <minutes> [reason]", "Блокирует игрока, который ранее был на сервере (нужны права manage_messages).", False),
       ("unban", " <steam_id>", "Разблокирует игрока по Steam ID (нужны права manage_messages).", False),
       ("sync_maps", "", "Синхронизирует список карт между MySQL, Redis и сервером (нужны права manage_messages).", False),
-      ("server_maps", " [page] [per_page]", "Показывает активную ротацию карт с CS-сервера (нужны права manage_messages).", False),
-      ("server_maps_installed", " [page] [per_page]", "Показывает установленные .bsp карты из папки maps на CS-сервере (нужны права manage_messages).", False),
+      ("server_maps", " [page] [per_page]", "Показывает активную ротацию карт с CS-сервера через webhook snapshot (нужны права manage_messages).", False),
+      ("server_maps_installed", " [page] [per_page]", "Показывает установленные .bsp карты из папки maps через webhook snapshot (нужны права manage_messages).", False),
       ("map_change", " <map>", "Меняет текущую карту на сервере (нужны права manage_messages).", False),
       (
         "map_install",
@@ -215,7 +215,7 @@ async def cmd_sync_maps(interaction: discord.Interaction):
   })
 
 # -- /server_maps
-@bot.tree.command(name="server_maps", description="Показывает активную ротацию карт с игрового сервера")
+@bot.tree.command(name="server_maps", description="Показывает активную ротацию карт с игрового сервера (webhook snapshot)")
 @discord.app_commands.describe(
   page="Номер страницы (начиная с 1)",
   per_page="Количество карт на странице (1-50)"
@@ -231,7 +231,7 @@ async def cmd_server_maps(interaction: discord.Interaction, page: int = 1, per_p
   })
 
 # -- /server_maps_installed
-@bot.tree.command(name="server_maps_installed", description="Показывает .bsp карты из папки maps на игровом сервере")
+@bot.tree.command(name="server_maps_installed", description="Показывает .bsp карты из папки maps на игровом сервере (webhook snapshot)")
 @discord.app_commands.describe(
   page="Номер страницы (начиная с 1)",
   per_page="Количество карт на странице (1-50)"

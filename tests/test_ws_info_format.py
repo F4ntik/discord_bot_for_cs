@@ -22,7 +22,7 @@ if not hasattr(config_module, "API_KEY"):
   config_module.API_KEY = ""
 
 from observer.observer_client import Color
-from webserver.ws_client import format_info_message
+from webserver.ws_client import format_info_message, parse_maps_snapshot_payload
 
 
 def test_format_info_message_with_round_time_scores_and_bomb():
@@ -141,3 +141,33 @@ def test_format_info_message_planted_bomb_has_priority_over_bomb():
 
   assert f"{Color.Green}(planted bomb){Color.Default}" in message
   assert f"{Color.Green}(bomb){Color.Default}" not in message
+
+
+def test_parse_maps_snapshot_payload_ok():
+  payload, err = parse_maps_snapshot_payload(
+    {
+      "request_id": "abc123",
+      "mode": "installed",
+      "maps": ["de_dust2", "de_nuke"],
+      "total": 2,
+    }
+  )
+
+  assert err is None
+  assert payload["request_id"] == "abc123"
+  assert payload["mode"] == "installed"
+  assert payload["maps"] == ["de_dust2", "de_nuke"]
+  assert payload["total"] == 2
+
+
+def test_parse_maps_snapshot_payload_invalid_mode():
+  payload, err = parse_maps_snapshot_payload(
+    {
+      "request_id": "abc123",
+      "mode": "invalid",
+      "maps": ["de_dust2"],
+    }
+  )
+
+  assert payload is None
+  assert err == "bad_mode"

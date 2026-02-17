@@ -1,10 +1,15 @@
 import re
 
 
-_KNOWN_WEBHOOK_TYPES = {"message", "info"}
+_KNOWN_WEBHOOK_TYPES = {"message", "info", "maps_snapshot"}
+_COLLAPSED_WEBHOOK_TYPES = {
+  "".join(re.findall(r"[a-z]+", known)): known
+  for known in _KNOWN_WEBHOOK_TYPES
+}
 _WEBHOOK_TYPE_CODES = {
   1: "info",
   2: "message",
+  3: "maps_snapshot",
 }
 
 
@@ -54,11 +59,11 @@ def normalize_webhook_type(raw_type):
     return normalized
 
   collapsed = "".join(re.findall(r"[a-z]+", normalized))
-  if collapsed in _KNOWN_WEBHOOK_TYPES:
-    return collapsed
+  if collapsed in _COLLAPSED_WEBHOOK_TYPES:
+    return _COLLAPSED_WEBHOOK_TYPES[collapsed]
 
-  for known in _KNOWN_WEBHOOK_TYPES:
-    if _is_edit_distance_le_one(collapsed, known):
+  for collapsed_known, known in _COLLAPSED_WEBHOOK_TYPES.items():
+    if _is_edit_distance_le_one(collapsed, collapsed_known):
       return known
 
   return None

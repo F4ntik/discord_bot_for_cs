@@ -11,7 +11,7 @@
 - `cs_server/map_installer.py` — обработчик команды `/map_install` (синхронный запуск с переводом в фон при таймауте).
 - `cs_server/map_deploy_service.py` — сервис развёртывания карты (валидация вложения, FTP/FTPS upload, опциональная ротация, формирование результата).
 - `amxmodx_plugin/` — плагин AMX Mod X для игрового сервера. Не переустанавливается скриптом обновления.
-- `amxmodx_plugin/ultrahc_discord.sma` — содержит RCON-команду `ultrahc_ds_get_maps` для выдачи активной ротации и списка установленных карт с сервера.
+- `amxmodx_plugin/ultrahc_discord.sma` — содержит RCON-триггер `ultrahc_ds_push_maps`, который инициирует webhook snapshot карт (`maps_snapshot`) для активной ротации и списка установленных карт.
 - `requirements.txt` — зависимости Python.
 - `docs/` — документация проекта.
 - `PROJECT_LOG.md` — краткий журнал работ.
@@ -155,17 +155,24 @@ chmod +x restore.sh
 
 - `/server_maps`:
   - источник — активная серверная ротация (`maps_ultrahc.ini` / map manager);
-  - использует RCON-команду `ultrahc_ds_get_maps rotation`;
+  - отправляет RCON-триггер `ultrahc_ds_push_maps "rotation" "<request_id>"`, после чего ждёт webhook `type=maps_snapshot`;
   - поддерживает пагинацию `page` и `per_page` (по умолчанию `1` и `20`).
 - `/server_maps_installed`:
   - источник — фактические `.bsp` файлы в папке `maps/` на сервере;
-  - использует RCON-команду `ultrahc_ds_get_maps installed`;
+  - отправляет RCON-триггер `ultrahc_ds_push_maps "installed" "<request_id>"`, после чего ждёт webhook `type=maps_snapshot`;
   - поддерживает ту же пагинацию `page` и `per_page`.
 - Обе команды:
   - отвечают эпемерно;
   - показывают явный источник данных в ответе;
-  - устойчивы к длинным ответам ReHLDS/HLDS: бот склеивает многопакетный UDP-ответ RCON перед разбором маркеров `ULTRAHC_MAPS_BEGIN/END`;
+  - не используют парсинг длинного RCON-ответа со списком карт (данные приходят отдельным webhook snapshot);
+  - имеют жёсткий таймаут ожидания snapshot `CS_MAPS_SNAPSHOT_TIMEOUT_SEC` (по умолчанию `6` секунд), без fallback на старый RCON-парсинг;
   - при выходе `page` за диапазон возвращают сообщение с допустимыми страницами.
+- Новый webhook payload для списка карт:
+  - `type: "maps_snapshot"`, `type_code: 3`;
+  - `request_id` — корреляционный идентификатор запроса;
+  - `mode` — `rotation` или `installed`;
+  - `maps` — массив названий карт;
+  - `total` — количество карт в snapshot.
 
 ## Команда `/map_install`
 Команда предназначена для прод-установки карт через Discord: принимает `.bsp` или `.zip`, загружает карту и ресурсы на игровой сервер по FTP/FTPS и (опционально) добавляет карту в ротацию.
@@ -201,7 +208,7 @@ chmod +x restore.sh
 
 
 ## Устойчивость webhook type
-- В обработчике `/webhook` поле `type` нормализуется перед маршрутизацией (`info`/`message`): обрезаются края строки, а также схлопываются пробелы и управляющие символы внутри значения.
+- В обработчике `/webhook` поле `type` нормализуется перед маршрутизацией (`info`/`message`/`maps_snapshot`): обрезаются края строки, а также схлопываются пробелы и управляющие символы внутри значения.
 - Это защищает status webhook от ложного `400 Bad Request`, если HTTP-клиент/плагин прислал `type` в «грязном» формате (например, `in\x00fo` или `mes\nsage`).
 - Если после нормализации значение всё ещё не распознано, бот по-прежнему отвечает `Bad Request: unknown_type`.
 
@@ -212,7 +219,7 @@ chmod +x restore.sh
 
 
 ## Резервный тип webhook (type_code)
-- AMX-плагин дополнительно передаёт поле type_code (1=info, 2=message) вместе со строковым type.
+- AMX-плагин дополнительно передаёт поле type_code (1=info, 2=message, 3=maps_snapshot) вместе со строковым type.
 - Бот сначала пытается распознать type как строку, а если строка повреждена, использует type_code как fallback.
 - Это снижает риск Bad Request: unknown_type при редких искажениях символов в HTTP payload.
 

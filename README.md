@@ -12,7 +12,7 @@
 - При запуске бот отправляет уведомление в администраторский канал (ID задаётся в `config.py`).
 - Статус CS в Discord обновляется push-вебхуками из AMX-плагина (события + heartbeat), без постоянного RCON-поллинга.
 - Команда `/map_install` поддерживает `.bsp` и `.zip`: архив может содержать карту и ресурсы (`maps/models/sound/sprites/gfx/overviews/resource`).
-- Добавлены явные серверные команды списка карт: `/server_maps` (активная ротация) и `/server_maps_installed` (все `.bsp` в `maps/`), чтобы не путать источник с БД бота.
+- Добавлены явные серверные команды списка карт: `/server_maps` (активная ротация) и `/server_maps_installed` (все `.bsp` в `maps/`); данные приходят через webhook snapshot, чтобы не путать источник с БД бота.
 
 ## Быстрый чеклист для `/map_install`
 - В `config.py` должны быть заполнены: `MAP_DEPLOY_PROTOCOL`, `MAP_FTP_HOST`, `MAP_FTP_PORT`, `MAP_FTP_USER`, `MAP_FTP_PASSWORD`.

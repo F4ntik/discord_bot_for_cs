@@ -17,6 +17,7 @@ class Event(Enum):
   # WebHook events
   WBH_INFO = "wbh_info"
   WBH_MESSAGE = "wbh_message"
+  WBH_MAPS_SNAPSHOT = "wbh_maps_snapshot"
 
   # Bot events
   BE_READY = "be_ready"

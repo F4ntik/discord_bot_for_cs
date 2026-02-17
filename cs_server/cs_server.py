@@ -5,6 +5,7 @@ import discord
 import asyncio
 import time
 from typing import List
+from uuid import uuid4
 
 import config
 
@@ -22,10 +23,15 @@ MAPS_OUTPUT_ERROR = "ULTRAHC_MAPS_ERROR"
 MAPS_PAGE_DEFAULT = 1
 MAPS_PER_PAGE_DEFAULT = 20
 MAPS_PER_PAGE_MAX = 50
+MAPS_SNAPSHOT_TIMEOUT_DEFAULT_SEC = 6.0
+AMXX_MAPS_PUSH_REQUEST_ID_MAX_LENGTH = 64
 DISCORD_MESSAGE_SAFE_LIMIT = 1800
 AMXX_DS_SEND_CMD_TEXT_LENGTH = 256
 AMXX_DS_SEND_AUTHOR_LENGTH = 64
 AMXX_DS_SEND_MESSAGE_LENGTH = 192
+
+_maps_snapshot_pending_lock: asyncio.Lock = asyncio.Lock()
+_maps_snapshot_pending = {}
 
 
 def _mark_connected() -> None:
@@ -121,6 +127,87 @@ def _normalize_maps_pagination(page: int, per_page: int) -> tuple[int, int]:
   return page, per_page
 
 
+def _get_maps_snapshot_timeout_sec() -> float:
+  raw_value = getattr(config, "CS_MAPS_SNAPSHOT_TIMEOUT_SEC", MAPS_SNAPSHOT_TIMEOUT_DEFAULT_SEC)
+  try:
+    value = float(raw_value)
+  except (TypeError, ValueError):
+    return MAPS_SNAPSHOT_TIMEOUT_DEFAULT_SEC
+
+  if value <= 0:
+    return MAPS_SNAPSHOT_TIMEOUT_DEFAULT_SEC
+
+  return value
+
+
+def _new_maps_request_id() -> str:
+  return uuid4().hex
+
+
+def _normalize_snapshot_maps(maps_raw) -> List[str]:
+  if not isinstance(maps_raw, list):
+    return []
+
+  maps: List[str] = []
+  for map_name in maps_raw:
+    if map_name is None:
+      continue
+
+    normalized_name = str(map_name).strip()
+    if not normalized_name:
+      continue
+
+    maps.append(normalized_name)
+
+  return maps
+
+
+async def _register_maps_snapshot_request(mode: str) -> tuple[str, asyncio.Future]:
+  loop = asyncio.get_running_loop()
+  future = loop.create_future()
+
+  async with _maps_snapshot_pending_lock:
+    for _ in range(5):
+      request_id = _new_maps_request_id()
+      if request_id in _maps_snapshot_pending:
+        continue
+
+      _maps_snapshot_pending[request_id] = {
+        "mode": mode,
+        "future": future,
+        "created_at": time.monotonic(),
+      }
+      return request_id, future
+
+  raise CommandExecutionError("Не удалось создать request_id для maps_snapshot.")
+
+
+async def _pop_maps_snapshot_request(request_id: str):
+  async with _maps_snapshot_pending_lock:
+    return _maps_snapshot_pending.pop(request_id, None)
+
+
+def _format_maps_response_content(source_label: str, maps: List[str], page: int, per_page: int) -> str:
+  total = len(maps)
+  if total == 0:
+    return f"Источник: {source_label}\nСписок карт пуст."
+
+  total_pages = (total + per_page - 1) // per_page
+  if page > total_pages:
+    return f"Страница {page} недоступна. Доступно страниц: 1..{total_pages}."
+
+  start = (page - 1) * per_page
+  end = min(start + per_page, total)
+  lines = [
+    f"Источник: {source_label}",
+    f"Всего карт: {total}",
+    f"Страница {page}/{total_pages}",
+    "",
+  ]
+  lines.extend(f"{idx}. {name}" for idx, name in enumerate(maps[start:end], start=start + 1))
+  return "\n".join(lines)
+
+
 def _parse_server_maps_response(command: str, expected_mode: str, response: str) -> List[str]:
   if response is None:
     raise CommandExecutionError(f"Команда {command} не вернула данные.")
@@ -185,50 +272,65 @@ async def _reply_server_maps(
     await interaction.followup.send(content=str(err), ephemeral=True)
     return
 
-  command = f"ultrahc_ds_get_maps {mode}"
+  try:
+    request_id, snapshot_future = await _register_maps_snapshot_request(mode)
+  except CommandExecutionError as err:
+    logger.error(f"CS Server: {err}")
+    await interaction.followup.send(
+      content="Не удалось подготовить запрос списка карт. Проверьте логи.",
+      ephemeral=True,
+    )
+    return
+
+  safe_mode = escape_rcon_param(mode)
+  safe_request_id = escape_rcon_param(request_id)
+  command = f"ultrahc_ds_push_maps \"{safe_mode}\" \"{safe_request_id}\""
 
   try:
     response = await cs_server.exec(command)
     _validate_rcon_response(command, response)
-    maps = _parse_server_maps_response(command, mode, response)
   except CommandExecutionError as err:
+    await _pop_maps_snapshot_request(request_id)
     logger.error(f"CS Server: {err}")
     await interaction.followup.send(
-      content="Не удалось получить список карт с сервера. Проверьте логи.",
+      content="Не удалось отправить запрос списка карт на сервер. Проверьте логи.",
       ephemeral=True,
     )
     return
 
+  timeout_sec = _get_maps_snapshot_timeout_sec()
+  try:
+    snapshot_data = await asyncio.wait_for(snapshot_future, timeout=timeout_sec)
+  except asyncio.TimeoutError:
+    await _pop_maps_snapshot_request(request_id)
+    logger.error(
+      "CS Server: maps snapshot timeout mode=%s request_id=%s timeout=%.1fs",
+      mode,
+      request_id,
+      timeout_sec,
+    )
+    await interaction.followup.send(
+      content=f"Не удалось получить snapshot списка карт за {timeout_sec:.1f}с.",
+      ephemeral=True,
+    )
+    return
+  except CommandExecutionError as err:
+    logger.error(f"CS Server: {err}")
+    await interaction.followup.send(content=str(err), ephemeral=True)
+    return
+  except Exception as err:
+    logger.error(f"CS Server: Ошибка ожидания maps snapshot: {err}")
+    await interaction.followup.send(
+      content="Не удалось получить snapshot списка карт. Проверьте логи.",
+      ephemeral=True,
+    )
+    return
+
+  maps = _normalize_snapshot_maps(snapshot_data.get("maps"))
   if sort_result:
     maps = sorted(set(maps), key=str.lower)
 
-  total = len(maps)
-  if total == 0:
-    await interaction.followup.send(
-      content=f"Источник: {source_label}\nСписок карт пуст.",
-      ephemeral=True,
-    )
-    return
-
-  total_pages = (total + per_page - 1) // per_page
-  if page > total_pages:
-    await interaction.followup.send(
-      content=f"Страница {page} недоступна. Доступно страниц: 1..{total_pages}.",
-      ephemeral=True,
-    )
-    return
-
-  start = (page - 1) * per_page
-  end = min(start + per_page, total)
-  lines = [
-    f"Источник: {source_label}",
-    f"Всего карт: {total}",
-    f"Страница {page}/{total_pages}",
-    "",
-  ]
-  lines.extend(f"{idx}. {name}" for idx, name in enumerate(maps[start:end], start=start + 1))
-
-  content = "\n".join(lines)
+  content = _format_maps_response_content(source_label, maps, page, per_page)
   if len(content) > DISCORD_MESSAGE_SAFE_LIMIT:
     await interaction.followup.send(
       content=(
@@ -240,6 +342,51 @@ async def _reply_server_maps(
     return
 
   await interaction.followup.send(content=content, ephemeral=True)
+
+@observer.subscribe(Event.WBH_MAPS_SNAPSHOT)
+async def on_webhook_maps_snapshot(data):
+  request_id = str(data.get("request_id", "")).strip()
+  mode = str(data.get("mode", "")).strip().lower()
+  maps = _normalize_snapshot_maps(data.get("maps"))
+
+  if not request_id or len(request_id) > AMXX_MAPS_PUSH_REQUEST_ID_MAX_LENGTH:
+    logger.error("CS Server: invalid maps snapshot request_id=%r", request_id)
+    return
+
+  pending = await _pop_maps_snapshot_request(request_id)
+  if not pending:
+    logger.warning(
+      "CS Server: maps snapshot without pending request request_id=%s mode=%s",
+      request_id,
+      mode,
+    )
+    return
+
+  expected_mode = str(pending.get("mode", "")).strip().lower()
+  future = pending.get("future")
+  if not isinstance(future, asyncio.Future):
+    logger.error("CS Server: invalid pending future for request_id=%s", request_id)
+    return
+
+  if mode != expected_mode:
+    if not future.done():
+      future.set_exception(
+        CommandExecutionError(
+          f"Получен maps snapshot в режиме {mode}, ожидался {expected_mode} (request_id={request_id})."
+        )
+      )
+    return
+
+  if not future.done():
+    future.set_result(
+      {
+        "request_id": request_id,
+        "mode": mode,
+        "maps": maps,
+        "total": len(maps),
+      }
+    )
+
 
 # !SECTION
 

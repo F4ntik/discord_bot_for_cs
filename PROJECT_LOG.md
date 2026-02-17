@@ -165,4 +165,10 @@
 - Исправлен разбор длинных RCON-ответов для `/server_maps_installed`: `rehlds/rcon.py` теперь собирает ответ команды из нескольких UDP-пакетов (burst read) вместо одного `recv`, поэтому маркер `ULTRAHC_MAPS_BEGIN` больше не теряется на больших списках карт.
 - Добавлен регрессионный тест `tests/test_rcon_parsing.py::test_parse_command_packets_combines_split_payload` на склейку сегментированного ответа.
 - Версия бота повышена до `0.4.9` (`VERSION`) в совместимой линии `B=4`.
+- Команды `/server_maps` и `/server_maps_installed` переведены на схему `RCON trigger -> webhook maps_snapshot`: бот больше не парсит длинный RCON-ответ со списком карт.
+- Добавлен новый webhook-тип `maps_snapshot` (`type_code=3`) и событие `Event.WBH_MAPS_SNAPSHOT`; snapshot сопоставляется по `request_id`.
+- В `cs_server/cs_server.py` добавлен pending-реестр snapshot-запросов и жёсткий таймаут ожидания `CS_MAPS_SNAPSHOT_TIMEOUT_SEC` (по умолчанию 6с), без fallback на старый путь.
+- В AMX-плагин добавлена команда `ultrahc_ds_push_maps <mode> <request_id>`, которая публикует snapshot карт (`rotation`/`installed`) через webhook.
+- Обновлены `/help`, `docs/PROJECT_DOC_RU.md`, `docs/COMMANDS_REFERENCE_RU.md` и `README.md` под новую архитектуру.
+- Версия бота повышена до `0.4.10` (`VERSION`), версия AMX-плагина — до `0.4.21` (`PLUGIN_VERSION`), совместимость сохраняется в линии `B=4`.
 
