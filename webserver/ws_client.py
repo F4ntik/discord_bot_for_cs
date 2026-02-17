@@ -46,38 +46,81 @@ def format_message(nick, cs_message, team, channel_prefix):
 
   return f"{Color.Green}{timestamp}{Color.Default} {channel_prefix} {nick_color}{nick}{Color.Default}: {cs_message}\n"
 
+# -- _safe_int
+def _safe_int(value, default=0):
+  try:
+    return int(value)
+  except (TypeError, ValueError):
+    return default
+
+# -- _format_mmss
+def _format_mmss(seconds):
+  if not isinstance(seconds, int) or seconds < 0:
+    return "--:--"
+  minutes, secs = divmod(seconds, 60)
+  return f"{minutes:02d}:{secs:02d}"
+
 # -- format_info_message
-def format_info_message(map_name, current_players, max_players, player_count_override=None):
+def format_info_message(
+  map_name,
+  current_players,
+  max_players,
+  player_count_override=None,
+  map_timeleft_sec=None,
+  round_number=None,
+  score_t=None,
+  score_ct=None,
+  bomb_carrier_steam_id=None,
+):
+  current_players = current_players if isinstance(current_players, list) else []
   player_count = (
     player_count_override
     if isinstance(player_count_override, int) and player_count_override >= 0
     else len(current_players)
   )
+  max_players = _safe_int(max_players, 0)
+  score_t = _safe_int(score_t, 0)
+  score_ct = _safe_int(score_ct, 0)
+  round_number = _safe_int(round_number, 0)
+  map_timeleft = _safe_int(map_timeleft_sec, -1)
+  bomb_carrier_steam_id = str(bomb_carrier_steam_id or "")
   team_players = {1: [], 2: [], 3: []}
 
   for player in current_players:
-    player_name = player['name']
-    stats = player['stats']
-    frags = stats[0]
-    deaths = stats[1]
-    team = stats[2]
+    if not isinstance(player, dict):
+      continue
+
+    player_name = str(player.get('name', 'Unknown'))
+    stats = player.get('stats', [])
+    if not isinstance(stats, list):
+      stats = []
+    frags = _safe_int(stats[0] if len(stats) > 0 else 0, 0)
+    deaths = _safe_int(stats[1] if len(stats) > 1 else 0, 0)
+    team = _safe_int(stats[2] if len(stats) > 2 else 3, 3)
+    player_steam_id = str(player.get('steam_id', ''))
+
+    bomb_suffix = ""
+    if bomb_carrier_steam_id and player_steam_id == bomb_carrier_steam_id:
+      bomb_suffix = f" {Color.Green}(bomb){Color.Default}"
 
     if team in team_players:
-      team_players[team].append(f"{player_name} - {frags}/{deaths}")
+      team_players[team].append(f"{player_name} - {frags}/{deaths}{bomb_suffix}")
     else: # По идее это UNASSIGNED, суем в спектров
-      team_players[3].append(f"{player_name} - {frags}/{deaths}")
+      team_players[3].append(f"{player_name} - {frags}/{deaths}{bomb_suffix}")
 
   formatted_info = []
   formatted_info.append(f"Время: {datetime.now().strftime('%H:%M')}")
   formatted_info.append(f"Название карты: {map_name}")
   formatted_info.append(f"Количество игроков: {player_count} / {max_players}")
+  formatted_info.append(f"До конца карты: {_format_mmss(map_timeleft)}")
+  formatted_info.append(f"Номер раунда: {round_number}")
 
   if team_players[1]:
-    formatted_info.append(f"\n{TextStyle.Bold}{Color.Red}Terrorists:{TextStyle.Default}")
+    formatted_info.append(f"\n{TextStyle.Bold}{Color.Red}Terrorists({score_t}):{TextStyle.Default}")
     formatted_info.append("\n".join(f"\t{player}" for player in team_players[1]))
 
   if team_players[2]:
-    formatted_info.append(f"\n{TextStyle.Bold}{Color.Blue}Counter-Terrorists:{TextStyle.Default}")
+    formatted_info.append(f"\n{TextStyle.Bold}{Color.Blue}Counter-Terrorists({score_ct}):{TextStyle.Default}")
     formatted_info.append("\n".join(f"\t{player}" for player in team_players[2]))
 
   if team_players[3]:
@@ -204,19 +247,32 @@ async def handle_info(data):
     current_players = data.get('current_players', [])
     max_players = data.get('max_players')
     player_count = data.get('player_count')
+    map_timeleft_sec = data.get('map_timeleft_sec')
+    round_number = data.get('round_number')
+    score_t = data.get('score_t')
+    score_ct = data.get('score_ct')
+    bomb_carrier_steam_id = data.get('bomb_carrier_steam_id')
 
     formatted_info = format_info_message(
       map_name,
       current_players,
       max_players,
-      player_count_override=player_count
+      player_count_override=player_count,
+      map_timeleft_sec=map_timeleft_sec,
+      round_number=round_number,
+      score_t=score_t,
+      score_ct=score_ct,
+      bomb_carrier_steam_id=bomb_carrier_steam_id,
     )
 
     logger.info(
-      "Webhook info received: map=%s players=%s/%s",
+      "Webhook info received: map=%s players=%s/%s round=%s score_t=%s score_ct=%s",
       map_name,
       player_count if isinstance(player_count, int) else (len(current_players) if isinstance(current_players, list) else "?"),
       max_players,
+      round_number,
+      score_t,
+      score_ct,
     )
 
     await observer.notify(Event.WBH_INFO, {
