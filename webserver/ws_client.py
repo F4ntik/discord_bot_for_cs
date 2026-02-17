@@ -71,6 +71,7 @@ def format_info_message(
   score_t=None,
   score_ct=None,
   bomb_carrier_steam_id=None,
+  bomb_carrier_slot=None,
 ):
   current_players = current_players if isinstance(current_players, list) else []
   player_count = (
@@ -84,6 +85,7 @@ def format_info_message(
   round_number = _safe_int(round_number, 0)
   map_timeleft = _safe_int(map_timeleft_sec, -1)
   bomb_carrier_steam_id = str(bomb_carrier_steam_id or "")
+  bomb_carrier_slot = _safe_int(bomb_carrier_slot, -1)
   team_players = {1: [], 2: [], 3: []}
 
   for player in current_players:
@@ -98,9 +100,21 @@ def format_info_message(
     deaths = _safe_int(stats[1] if len(stats) > 1 else 0, 0)
     team = _safe_int(stats[2] if len(stats) > 2 else 3, 3)
     player_steam_id = str(player.get('steam_id', ''))
+    player_slot = _safe_int(player.get('slot'), -1)
 
     bomb_suffix = ""
-    if bomb_carrier_steam_id and player_steam_id == bomb_carrier_steam_id:
+    is_bomb_carrier = False
+    if bomb_carrier_slot > 0:
+      is_bomb_carrier = player_slot == bomb_carrier_slot
+    elif bomb_carrier_steam_id and player_steam_id:
+      # Для ботов steam_id часто одинаковый ('BOT'), поэтому fallback по steam_id
+      # используем только для неботов.
+      is_bomb_carrier = (
+        bomb_carrier_steam_id.upper() != "BOT"
+        and player_steam_id == bomb_carrier_steam_id
+      )
+
+    if is_bomb_carrier:
       bomb_suffix = f" {Color.Green}(bomb){Color.Default}"
 
     if team in team_players:
@@ -252,6 +266,7 @@ async def handle_info(data):
     score_t = data.get('score_t')
     score_ct = data.get('score_ct')
     bomb_carrier_steam_id = data.get('bomb_carrier_steam_id')
+    bomb_carrier_slot = data.get('bomb_carrier_slot')
 
     formatted_info = format_info_message(
       map_name,
@@ -263,6 +278,7 @@ async def handle_info(data):
       score_t=score_t,
       score_ct=score_ct,
       bomb_carrier_steam_id=bomb_carrier_steam_id,
+      bomb_carrier_slot=bomb_carrier_slot,
     )
 
     logger.info(
