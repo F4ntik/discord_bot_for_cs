@@ -78,6 +78,13 @@ else
   git clone --depth 1 "$REPO_URL" "$TMP_DIR/repo"
 fi
 
+if [[ -f "$TMP_DIR/repo/VERSION" ]]; then
+  REPO_VERSION="$(tr -d '\r\n' < "$TMP_DIR/repo/VERSION")"
+  if [[ -n "$REPO_VERSION" ]]; then
+    echo "[updater] Version from branch: $REPO_VERSION"
+  fi
+fi
+
 echo "[updater] Обновление файлов проекта"
 rsync -a --delete \
   --exclude 'venv' \
@@ -89,6 +96,13 @@ rsync -a --delete \
   --exclude 'PROJECT_LOG.md' \
   --exclude 'AGENTS.md' \
   "$TMP_DIR/repo"/ "$PROJECT_DIR"/
+
+if [[ -f "$PROJECT_DIR/VERSION" ]]; then
+  ACTIVE_VERSION="$(tr -d '\r\n' < "$PROJECT_DIR/VERSION")"
+  if [[ -n "$ACTIVE_VERSION" ]]; then
+    echo "[updater] Installed version: $ACTIVE_VERSION"
+  fi
+fi
 
 CURRENT_CONFIG="$PROJECT_DIR/config.py"
 TEMPLATE_CONFIG="$TMP_DIR/repo/config.py"
@@ -223,3 +237,4 @@ echo "[updater] Запуск сервиса $SERVICE_NAME"
 $SUDO_BIN systemctl start "$SERVICE_NAME"
 
 echo "[updater] Готово"
+

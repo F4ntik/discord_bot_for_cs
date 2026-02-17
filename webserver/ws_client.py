@@ -1,6 +1,6 @@
 from enum import Enum
 from observer.observer_client import logger, observer, Event, nsroute, Color, TextStyle
-from webserver.webhook_type import normalize_webhook_type
+from webserver.webhook_type import normalize_webhook_type, normalize_webhook_type_code
 from webserver.web_server import WebServer, WebServerError
 
 from aiohttp import web
@@ -227,7 +227,13 @@ async def handle_webhook(request: web.Request):
     return web.Response(text="Bad Request: bad_json", status=400)
 
   raw_message_type = data.get('type')
-  if raw_message_type is None or (isinstance(raw_message_type, str) and not raw_message_type.strip()):
+  raw_message_type_code = data.get('type_code')
+  has_text_type = not (
+    raw_message_type is None
+    or (isinstance(raw_message_type, str) and not raw_message_type.strip())
+  )
+
+  if not has_text_type and raw_message_type_code is None:
     logger.error(
       "Webhook missing type: ip=%s method=%s url=%s content_length=%s",
       request.remote,
@@ -237,11 +243,25 @@ async def handle_webhook(request: web.Request):
     )
     return web.Response(text="Bad Request: missing_type", status=400)
 
-  message_type = normalize_webhook_type(raw_message_type)
+  message_type = normalize_webhook_type(raw_message_type) if has_text_type else None
+  fallback_message_type = normalize_webhook_type_code(raw_message_type_code)
+  if not message_type and fallback_message_type:
+    message_type = fallback_message_type
+    logger.warning(
+      "Webhook type recovered by type_code: type=%r type_code=%r normalized=%s ip=%s method=%s url=%s",
+      raw_message_type,
+      raw_message_type_code,
+      message_type,
+      request.remote,
+      request.method,
+      request.url,
+    )
+
   if not message_type:
     logger.error(
-      "Webhook unknown type: type=%r len=%s ip=%s method=%s url=%s",
+      "Webhook unknown type: type=%r type_code=%r len=%s ip=%s method=%s url=%s",
       raw_message_type,
+      raw_message_type_code,
       len(raw_message_type) if isinstance(raw_message_type, str) else "?",
       request.remote,
       request.method,

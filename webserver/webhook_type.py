@@ -2,6 +2,10 @@ import re
 
 
 _KNOWN_WEBHOOK_TYPES = {"message", "info"}
+_WEBHOOK_TYPE_CODES = {
+  1: "info",
+  2: "message",
+}
 
 
 def _is_edit_distance_le_one(value, target):
@@ -58,3 +62,15 @@ def normalize_webhook_type(raw_type):
       return known
 
   return None
+
+
+def normalize_webhook_type_code(raw_type_code):
+  if isinstance(raw_type_code, bool):
+    return None
+
+  try:
+    code = int(raw_type_code)
+  except (TypeError, ValueError):
+    return None
+
+  return _WEBHOOK_TYPE_CODES.get(code)
