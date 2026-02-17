@@ -10,7 +10,7 @@
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
 #define PLUGIN_VERSION 	"0.4.14"
-#define PLUGIN_AUTHOR 	"Asura"
+#define PLUGIN_AUTHOR 	"Asura, Mep3ocTb"
 
 //-----------------------------------------
 
