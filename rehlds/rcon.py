@@ -7,7 +7,6 @@ startBytes = b'\xFF\xFF\xFF\xFF'
 endBytes = b'\n'
 packetSize = 8192
 RCON_TEXT_ENCODING = 'cp1251'
-RCON_PACKET_BURST_TIMEOUT = 0.08
 
 # SECTION Исключения RCON
 # -- RCONError
@@ -122,39 +121,6 @@ class RCON:
     except Exception:
       return cleaned.decode(errors="ignore").strip("\x00\r\n ")
 
-  @staticmethod
-  def _parse_command_packets(raw_packets: list[bytes]) -> str:
-    if not raw_packets:
-      return ""
-
-    chunks = []
-    for raw in raw_packets:
-      text = RCON._parse_command_packet(raw)
-      if text:
-        chunks.append(text)
-
-    return "\n".join(chunks).strip("\x00\r\n ")
-
-  def _recv_command_packets(self) -> list[bytes]:
-    if not self.sock:
-      raise NoConnection("Нет соединения с RCON.")
-
-    raw_packets: list[bytes] = []
-    raw_packets.append(self.sock.recv(packetSize))
-
-    original_timeout = self.sock.gettimeout()
-    try:
-      self.sock.settimeout(RCON_PACKET_BURST_TIMEOUT)
-      while True:
-        try:
-          raw_packets.append(self.sock.recv(packetSize))
-        except socket.timeout:
-          break
-    finally:
-      self.sock.settimeout(original_timeout)
-
-    return raw_packets
-
   # -- getChallenge()
   def getChallenge(self) -> str:
     """
@@ -203,8 +169,8 @@ class RCON:
       msg.write(endBytes)
 
       self.sock.send(msg.getvalue())
-      raw_packets = self._recv_command_packets()
-      return self._parse_command_packets(raw_packets)
+      raw = self.sock.recv(packetSize)
+      return self._parse_command_packet(raw)
     except Exception as e:
       self.disconnect()
       raise ServerOffline(f"Ошибка в execute (RCON) (Возможно, сервер оффлайн): {str(e)}")
