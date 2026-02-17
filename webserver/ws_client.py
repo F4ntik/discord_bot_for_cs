@@ -1,5 +1,6 @@
 from enum import Enum
 from observer.observer_client import logger, observer, Event, nsroute, Color, TextStyle
+from webserver.webhook_type import normalize_webhook_type
 from webserver.web_server import WebServer, WebServerError
 
 from aiohttp import web
@@ -223,10 +224,10 @@ async def handle_webhook(request: web.Request):
       request.content_type,
       err,
     )
-    return web.Response(text="Bad Request", status=400)
+    return web.Response(text="Bad Request: bad_json", status=400)
 
-  message_type: str = data.get('type')
-  if not message_type:
+  raw_message_type = data.get('type')
+  if raw_message_type is None or (isinstance(raw_message_type, str) and not raw_message_type.strip()):
     logger.error(
       "Webhook missing type: ip=%s method=%s url=%s content_length=%s",
       request.remote,
@@ -234,7 +235,29 @@ async def handle_webhook(request: web.Request):
       request.url,
       request.content_length,
     )
-    return web.Response(text="Bad Request", status=400)
+    return web.Response(text="Bad Request: missing_type", status=400)
+
+  message_type = normalize_webhook_type(raw_message_type)
+  if not message_type:
+    logger.error(
+      "Webhook unknown type: type=%r len=%s ip=%s method=%s url=%s",
+      raw_message_type,
+      len(raw_message_type) if isinstance(raw_message_type, str) else "?",
+      request.remote,
+      request.method,
+      request.url,
+    )
+    return web.Response(text="Bad Request: unknown_type", status=400)
+
+  if isinstance(raw_message_type, str) and raw_message_type.strip().lower() != message_type:
+    logger.warning(
+      "Webhook normalized type: raw=%r normalized=%s ip=%s method=%s url=%s",
+      raw_message_type,
+      message_type,
+      request.remote,
+      request.method,
+      request.url,
+    )
 
   if message_type == WebHooksType.Message.value:
     try:
@@ -243,15 +266,6 @@ async def handle_webhook(request: web.Request):
       logger.exception(f"Ошибка обработки webhook message: {err}")
   elif message_type == WebHooksType.Info.value:
     await handle_info(data)
-  else:
-    logger.error(
-      "Webhook unknown type: type=%s ip=%s method=%s url=%s",
-      message_type,
-      request.remote,
-      request.method,
-      request.url,
-    )
-    return web.Response(text="Bad Request", status=400)
 
   return web.Response(text='OK')
 
