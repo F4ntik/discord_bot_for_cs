@@ -27,3 +27,15 @@ def test_parse_command_packet_print_prefix():
 def test_parse_command_packet_l_prefix():
     raw = startBytes + b"lServer cvar \"sv_cheats\" = \"0\"\n\x00"
     assert RCON._parse_command_packet(raw) == "Server cvar \"sv_cheats\" = \"0\""
+
+
+def test_parse_command_packets_combines_split_payload():
+    raw_packets = [
+        startBytes + b"print\nULTRAHC_MAPS_BEGIN installed\nde_dust2\n",
+        startBytes + b"de_inferno\nULTRAHC_MAPS_END 2\n\x00",
+    ]
+    parsed = RCON._parse_command_packets(raw_packets)
+    assert "ULTRAHC_MAPS_BEGIN installed" in parsed
+    assert "de_dust2" in parsed
+    assert "de_inferno" in parsed
+    assert "ULTRAHC_MAPS_END 2" in parsed
