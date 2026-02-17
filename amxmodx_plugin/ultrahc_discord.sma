@@ -9,7 +9,7 @@
 #pragma dynamic 32768
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.4.14"
+#define PLUGIN_VERSION 	"0.4.15"
 #define PLUGIN_AUTHOR 	"Asura, Mep3ocTb"
 
 //-----------------------------------------
@@ -107,6 +107,7 @@ public plugin_init() {
 		register_event("TeamInfo", "OnTeamInfo", "a");
 		register_event("TeamScore", "OnTeamScore", "a");
 		register_logevent("OnRoundStart", 2, "1=Round_Start");
+		register_logevent("OnBombLogEvent", 3);
 	#endif
 	
 	#if defined _map_manager_core_included
@@ -380,6 +381,19 @@ public OnTeamScore() {
 public OnRoundStart() {
 	g_round_number++;
 	ScheduleInfoPush();
+}
+
+public OnBombLogEvent() {
+	new event_line[256];
+	read_logargv(0, event_line, charsmax(event_line));
+
+	if(
+		containi(event_line, "Dropped_The_Bomb") != -1
+		|| containi(event_line, "Got_The_Bomb") != -1
+		|| containi(event_line, "Spawned_With_The_Bomb") != -1
+	) {
+		ScheduleInfoPush();
+	}
 }
 
 ScheduleInfoPush(Float:delay = INFO_PUSH_DEBOUNCE_SEC) {

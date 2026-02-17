@@ -118,7 +118,7 @@ chmod +x restore.sh
 Триггеры отправки `type=info`:
 - подключение игрока;
 - отключение игрока;
-- события `DeathMsg`, `TeamInfo`, `TeamScore` и `Round_Start` (изменения счёта/команды/раунда);
+- события `DeathMsg`, `TeamInfo`, `TeamScore`, `Round_Start` и бомбовые игровые события (`Got_The_Bomb`, `Dropped_The_Bomb`, `Spawned_With_The_Bomb`);
 - периодический heartbeat (по умолчанию раз в 30 секунд), чтобы статус не замирал даже при отсутствии игровых событий.
 - при большом числе игроков payload автоматически ограничивается по размеру, чтобы JSON webhook оставался валидным.
 
