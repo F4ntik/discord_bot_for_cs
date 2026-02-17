@@ -23,6 +23,9 @@ MAPS_PAGE_DEFAULT = 1
 MAPS_PER_PAGE_DEFAULT = 20
 MAPS_PER_PAGE_MAX = 50
 DISCORD_MESSAGE_SAFE_LIMIT = 1800
+AMXX_DS_SEND_CMD_TEXT_LENGTH = 256
+AMXX_DS_SEND_AUTHOR_LENGTH = 64
+AMXX_DS_SEND_MESSAGE_LENGTH = 192
 
 
 def _mark_connected() -> None:
@@ -76,6 +79,33 @@ def escape_rcon_param(value) -> str:
   text = text.replace("\\", "\\\\")
 
   return text
+
+
+def _prepare_ds_send_payload(author: str, content: str) -> tuple[str, str, bool]:
+  """Приводит автора/сообщение к ограничениям AMXX-плагина ultrahc_discord."""
+  safe_author = escape_rcon_param(author).replace("\r", " ").replace("\n", " ").strip()
+  safe_content = escape_rcon_param(content).replace("\r", " ").replace("\n", " ").strip()
+
+  if not safe_author:
+    safe_author = "Discord"
+
+  author_limit = AMXX_DS_SEND_AUTHOR_LENGTH - 1
+  if len(safe_author) > author_limit:
+    safe_author = safe_author[:author_limit]
+
+  # read_args(cmd_text, charsmax) в плагине: payload `"author" "content"` должен влезть в 255 символов.
+  cmd_payload_limit = AMXX_DS_SEND_CMD_TEXT_LENGTH - 1
+  max_content_by_cmd = cmd_payload_limit - (len(safe_author) + 5)  # 5 = две пары кавычек + пробел
+  max_content_by_msg = AMXX_DS_SEND_MESSAGE_LENGTH - 1
+  content_limit = max(0, min(max_content_by_cmd, max_content_by_msg))
+
+  truncated = len(safe_content) > content_limit
+  if content_limit == 0:
+    safe_content = ""
+  elif truncated:
+    safe_content = safe_content[:content_limit]
+
+  return safe_author, safe_content, truncated
 
 
 def _normalize_maps_pagination(page: int, per_page: int) -> tuple[int, int]:
@@ -246,11 +276,16 @@ async def connect():
 async def send_message(data):
   message: discord.Message = data[Param.Message]
 
-  author = escape_rcon_param(message.author.display_name)
-  content = escape_rcon_param(message.content)
+  author, content, truncated = _prepare_ds_send_payload(message.author.display_name, message.content)
+  if not content:
+    logger.info("CS Server: пропуск отправки пустого сообщения в CS")
+    return
+
   command = f"ultrahc_ds_send_msg \"{author}\" \"{content}\""
   
   try:
+    if truncated:
+      logger.info(f"CS Server: сообщение от {author} обрезано до {len(content)} символов под лимиты AMXX")
     logger.info(f"CS Server: отправка сообщения в CS от {author} (len={len(content)})")
     response = await cs_server.exec(command)
     _validate_rcon_response("ultrahc_ds_send_msg", response)
