@@ -16,6 +16,11 @@ The **ULTRAHC Discord Message Parser** plugin for AMX Mod X allows your Counter-
 
 ## Installation
 
+### Build Check (required)
+- Compiler path (local): `D:\cs\compilator_1_9_0`.
+- Example command (PowerShell): `& "D:\cs\compilator_1_9_0\amxxpc.exe" ultrahc_discord.sma -oultrahc_discord`.
+- After any `.sma` changes, always run a test compile before deploying to server.
+
 1. Place the `.sma` file in the `amxmodx/scripting` directory.
 2. Compile the plugin and move the `.amxx` file to the `amxmodx/plugins` folder.
 3. Add `ultrahc_discord_parser.amxx` to your `plugins.ini` file.

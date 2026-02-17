@@ -1,10 +1,12 @@
 from io import BytesIO
 from typing import Optional
 import socket
+import re
 
 startBytes = b'\xFF\xFF\xFF\xFF'
 endBytes = b'\n'
 packetSize = 8192
+RCON_TEXT_ENCODING = 'cp1251'
 
 # SECTION Исключения RCON
 # -- RCONError
@@ -78,6 +80,47 @@ class RCON:
       self.sock.close()
       self.sock = None
 
+  @staticmethod
+  def _strip_connectionless_prefix(raw: bytes) -> bytes:
+    if raw.startswith(startBytes):
+      return raw[len(startBytes):]
+    return raw
+
+  @staticmethod
+  def _parse_challenge_packet(raw: bytes) -> str:
+    cleaned = RCON._strip_connectionless_prefix(raw)
+    try:
+      text = cleaned.decode(RCON_TEXT_ENCODING, errors="ignore").strip("\x00\r\n ")
+    except Exception:
+      text = cleaned.decode(errors="ignore").strip("\x00\r\n ")
+
+    match = re.search(r"challenge(?:\s+rcon)?\s+(-?\d+)", text, flags=re.IGNORECASE)
+    if match:
+      return match.group(1)
+
+    numbers = re.findall(r"-?\d+", text)
+    if numbers:
+      return numbers[-1]
+
+    raise ValueError(f"Некорректный ответ challenge: {text!r}")
+
+  @staticmethod
+  def _parse_command_packet(raw: bytes) -> str:
+    cleaned = RCON._strip_connectionless_prefix(raw)
+
+    # Типичный ответ HLDS: "print\n<text>\n\0" или "l<text>\n\0".
+    if cleaned.startswith(b'print'):
+      cleaned = cleaned[len(b'print'):]
+      if cleaned.startswith(b'\n'):
+        cleaned = cleaned[1:]
+    elif cleaned.startswith(b'l'):
+      cleaned = cleaned[1:]
+
+    try:
+      return cleaned.decode(RCON_TEXT_ENCODING, errors="ignore").strip("\x00\r\n ")
+    except Exception:
+      return cleaned.decode(errors="ignore").strip("\x00\r\n ")
+
   # -- getChallenge()
   def getChallenge(self) -> str:
     """
@@ -97,8 +140,8 @@ class RCON:
       msg.write(endBytes)
       self.sock.send(msg.getvalue())
 
-      response = BytesIO(self.sock.recv(packetSize))
-      return str(response.getvalue()).split(" ")[1]
+      raw = self.sock.recv(packetSize)
+      return self._parse_challenge_packet(raw)
     except Exception as e:
       self.disconnect()
       raise ServerOffline(f"Ошибка в getChallenge (RCON) (Возможно, сервер оффлайн): {str(e)}")
@@ -118,17 +161,16 @@ class RCON:
       msg = BytesIO()
       msg.write(startBytes)
       msg.write(b'rcon ')
-      msg.write(challenge.encode())
+      msg.write(challenge.encode('ascii', errors='ignore'))
       msg.write(b' ')
-      msg.write(self.password.encode())
+      msg.write(self.password.encode(RCON_TEXT_ENCODING, errors='ignore'))
       msg.write(b' ')
-      msg.write(cmd.encode())
+      msg.write(cmd.encode(RCON_TEXT_ENCODING, errors='replace'))
       msg.write(endBytes)
 
       self.sock.send(msg.getvalue())
-      response = BytesIO(self.sock.recv(packetSize))
-
-      return response.getvalue()[5:-3].decode()
+      raw = self.sock.recv(packetSize)
+      return self._parse_command_packet(raw)
     except Exception as e:
       self.disconnect()
       raise ServerOffline(f"Ошибка в execute (RCON) (Возможно, сервер оффлайн): {str(e)}")
