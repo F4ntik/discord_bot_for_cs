@@ -58,6 +58,14 @@ def _validate_rcon_response(command: str, response: str) -> None:
 def require_connection(func) -> callable:
 
   async def wrapper(*args, **kwargs) -> callable:
+    if not cs_server.connected:
+      try:
+        await cs_server.connect_to_server()
+        _mark_connected()
+        logger.info("CS Server: auto-reconnected before command execution")
+      except CSConnectionError as err:
+        logger.error(f"CS Server: auto-reconnect failed: {err}")
+
     if cs_server.connected:
       return await func(*args, **kwargs)
 
@@ -323,6 +331,7 @@ async def cmd_rcon(data):
   command: str = data["command"]
   
   try:
+    logger.info(f"CS Server: executing RCON command: {command}")
     await cs_server.exec(command)
     logger.info(f"CS Server: выполнена команда: {command}")
     await interaction.followup.send(content="Команда выполнена!", ephemeral=True)
