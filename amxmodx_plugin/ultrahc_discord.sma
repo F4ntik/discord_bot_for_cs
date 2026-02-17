@@ -7,7 +7,7 @@
 #tryinclude <map_manager>
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.3-dbg-20260217-11"
+#define PLUGIN_VERSION 	"0.3-dbg-20260217-12"
 #define PLUGIN_AUTHOR 	"Asura"
 
 //-----------------------------------------
@@ -30,7 +30,7 @@
 #define INFO_PUSH_DEBOUNCE_SEC 1.0
 #define INFO_PUSH_HEARTBEAT_SEC 30.0
 #define INFO_MIN_POST_INTERVAL_SEC 0.8
-#define INFO_INCLUDE_PLAYERS 0
+#define INFO_INCLUDE_PLAYERS 1
 #define DS_PREFIX_LOOKUP_ENABLED 0
 #define TASK_INFO_PUSH 60001
 #define TASK_INFO_HEARTBEAT 60002
