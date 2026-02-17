@@ -23,9 +23,6 @@ class Event(Enum):
   BE_MESSAGE = "be_message"
   BE_MEMBER_UPDATE = "be_member_update"
 
-  # Bot tasks
-  BT_CS_Status = "bt_cs_status"
-
   # Bot command events
   BC_PING = "bc_ping"
 
@@ -46,6 +43,10 @@ class Event(Enum):
   BC_CS_UNBAN = "bc_cs_unban"
   BC_CS_MAP_CHANGE = "bc_cs_map_change"
   BC_CS_MAP_INSTALL = "bc_cs_map_install"
+  BC_CS_SERVER_MAPS = "bc_cs_server_maps"
+  BC_CS_SERVER_MAPS_INSTALLED = "bc_cs_server_maps_installed"
+  CS_MAP_INSTALL_DONE = "cs_map_install_done"
+  CS_MAP_INSTALL_FAILED = "cs_map_install_failed"
 
 
 # SECTION Observer

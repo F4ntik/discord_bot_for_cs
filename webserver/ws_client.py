@@ -1,5 +1,6 @@
 from enum import Enum
 from observer.observer_client import logger, observer, Event, nsroute, Color, TextStyle
+from webserver.webhook_type import normalize_webhook_type, normalize_webhook_type_code
 from webserver.web_server import WebServer, WebServerError
 
 from aiohttp import web
@@ -46,8 +47,12 @@ def format_message(nick, cs_message, team, channel_prefix):
   return f"{Color.Green}{timestamp}{Color.Default} {channel_prefix} {nick_color}{nick}{Color.Default}: {cs_message}\n"
 
 # -- format_info_message
-def format_info_message(map_name, current_players, max_players):
-  player_count = len(current_players)
+def format_info_message(map_name, current_players, max_players, player_count_override=None):
+  player_count = (
+    player_count_override
+    if isinstance(player_count_override, int) and player_count_override >= 0
+    else len(current_players)
+  )
   team_players = {1: [], 2: [], 3: []}
 
   for player in current_players:
@@ -81,8 +86,29 @@ def format_info_message(map_name, current_players, max_players):
 
   return "\n".join(formatted_info)
 
+# -- safe_request_url
+def safe_request_url(request: web.Request) -> str:
+  try:
+    return str(request.url)
+  except Exception:
+    try:
+      return str(request.rel_url)
+    except Exception:
+      return "<unknown>"
+
+# -- normalize_webhook_payload
+def normalize_webhook_payload(data):
+  if isinstance(data, dict):
+    return data
+
+  # Некоторые HTTP-клиенты могут оборачивать объект в одноэлементный массив.
+  if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
+    return data[0]
+
+  return None
+
 # -- check_api_key
-def check_api_key(request):
+def check_api_key(request, request_url: str = "<unknown>"):
   expected_key = getattr(config, "API_KEY", None)
 
   # Если ключ не задан (пустая строка/None), авторизацию отключаем.
@@ -98,7 +124,7 @@ def check_api_key(request):
     "Webhook unauthorized: ip=%s method=%s url=%s content_length=%s content_type=%s user_agent=%s",
     request.remote,
     request.method,
-    request.url,
+    request_url,
     request.content_length,
     request.content_type,
     request.headers.get("User-Agent"),
@@ -177,13 +203,19 @@ async def handle_info(data):
     map_name = data.get('map')
     current_players = data.get('current_players', [])
     max_players = data.get('max_players')
+    player_count = data.get('player_count')
 
-    formatted_info = format_info_message(map_name, current_players, max_players)
+    formatted_info = format_info_message(
+      map_name,
+      current_players,
+      max_players,
+      player_count_override=player_count
+    )
 
     logger.info(
       "Webhook info received: map=%s players=%s/%s",
       map_name,
-      len(current_players) if isinstance(current_players, list) else "?",
+      player_count if isinstance(player_count, int) else (len(current_players) if isinstance(current_players, list) else "?"),
       max_players,
     )
 
@@ -208,33 +240,89 @@ class WebHooksType(Enum):
 
 # -- handle_webhook
 async def handle_webhook(request: web.Request):
-  if not check_api_key(request):
+  request_url = safe_request_url(request)
+
+  if not check_api_key(request, request_url=request_url):
     return web.Response(text='Unauthorized', status=401)
   
   try:
-    data: dict = await request.json()
+    data_raw = await request.json()
   except Exception as err:
     logger.error(
       "Webhook bad json: ip=%s method=%s url=%s content_length=%s content_type=%s error=%s",
       request.remote,
       request.method,
-      request.url,
+      request_url,
       request.content_length,
       request.content_type,
       err,
     )
-    return web.Response(text="Bad Request", status=400)
+    return web.Response(text="Bad Request: bad_json", status=400)
 
-  message_type: str = data.get('type')
-  if not message_type:
+  data: dict = normalize_webhook_payload(data_raw)
+  if data is None:
+    logger.error(
+      "Webhook bad payload type: payload_type=%s ip=%s method=%s url=%s content_length=%s",
+      type(data_raw).__name__,
+      request.remote,
+      request.method,
+      request_url,
+      request.content_length,
+    )
+    return web.Response(text="Bad Request: bad_payload_type", status=400)
+
+  raw_message_type = data.get('type')
+  raw_message_type_code = data.get('type_code')
+  has_text_type = not (
+    raw_message_type is None
+    or (isinstance(raw_message_type, str) and not raw_message_type.strip())
+  )
+
+  if not has_text_type and raw_message_type_code is None:
     logger.error(
       "Webhook missing type: ip=%s method=%s url=%s content_length=%s",
       request.remote,
       request.method,
-      request.url,
+      request_url,
       request.content_length,
     )
-    return web.Response(text="Bad Request", status=400)
+    return web.Response(text="Bad Request: missing_type", status=400)
+
+  message_type = normalize_webhook_type(raw_message_type) if has_text_type else None
+  fallback_message_type = normalize_webhook_type_code(raw_message_type_code)
+  if not message_type and fallback_message_type:
+    message_type = fallback_message_type
+    logger.warning(
+      "Webhook type recovered by type_code: type=%r type_code=%r normalized=%s ip=%s method=%s url=%s",
+      raw_message_type,
+      raw_message_type_code,
+      message_type,
+      request.remote,
+      request.method,
+      request_url,
+    )
+
+  if not message_type:
+    logger.error(
+      "Webhook unknown type: type=%r type_code=%r len=%s ip=%s method=%s url=%s",
+      raw_message_type,
+      raw_message_type_code,
+      len(raw_message_type) if isinstance(raw_message_type, str) else "?",
+      request.remote,
+      request.method,
+      request_url,
+    )
+    return web.Response(text="Bad Request: unknown_type", status=400)
+
+  if isinstance(raw_message_type, str) and raw_message_type.strip().lower() != message_type:
+    logger.warning(
+      "Webhook normalized type: raw=%r normalized=%s ip=%s method=%s url=%s",
+      raw_message_type,
+      message_type,
+      request.remote,
+      request.method,
+      request_url,
+    )
 
   if message_type == WebHooksType.Message.value:
     try:
@@ -243,15 +331,6 @@ async def handle_webhook(request: web.Request):
       logger.exception(f"Ошибка обработки webhook message: {err}")
   elif message_type == WebHooksType.Info.value:
     await handle_info(data)
-  else:
-    logger.error(
-      "Webhook unknown type: type=%s ip=%s method=%s url=%s",
-      message_type,
-      request.remote,
-      request.method,
-      request.url,
-    )
-    return web.Response(text="Bad Request", status=400)
 
   return web.Response(text='OK')
 

@@ -110,6 +110,15 @@ class Log:
     """
     self.error_logger.error(message, *args, **kwargs)
 
+  # -- warning()
+  def warning(self, message: str, *args, **kwargs) -> None:
+    """
+    Выводит предупреждение.
+
+    :param message: Сообщение-предупреждение для вывода.
+    """
+    self.info_logger.warning(message, *args, **kwargs)
+
   # -- exception()
   def exception(self, message: str, *args, **kwargs) -> None:
     """

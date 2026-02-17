@@ -24,7 +24,7 @@ ADMIN_CHANNEL_ID = None
 # Идентификатор информационного канала
 INFO_CHANNEL_ID = 
 
-# Интервал обновления статуса бота в секундах
+# Legacy-параметр старой pull-модели статуса (оставлен для совместимости, сейчас не используется)
 STATUS_INTERVAL = 10
 
 #-------------------------------------------------------------------
@@ -33,10 +33,34 @@ CS_RECONNECT_INTERVAL = 60
 # Минимальный интервал между попытками подключения к CS (в секундах).
 # Нужен, чтобы избежать дублей при старте (BE_READY + автопереподключение).
 CS_CONNECT_MIN_INTERVAL = 2
-# Таймаут ожидания ответного webhook (type=info) после RCON-команды получения статуса.
-# Если за это время статус не пришёл, бот считает соединение деградировавшим и инициирует переподключение.
+# Параметры ниже оставлены для обратной совместимости.
+# После перехода на push-модель статуса (события + heartbeat из AMX) они не используются.
 CS_INFO_WEBHOOK_TIMEOUT = 12
 CS_INFO_WEBHOOK_MAX_MISSES = 3
+#-------------------------------------------------------------------
+
+# Параметры установки карт через /map_install (FTP/FTPS + опциональная ротация)
+MAP_DEPLOY_PROTOCOL = "ftps"  # ftp | ftps
+MAP_FTP_HOST = ""
+MAP_FTP_PORT = 21
+MAP_FTP_USER = ""
+MAP_FTP_PASSWORD = ""
+MAP_FTP_PASSIVE = True
+MAP_FTP_USE_TLS = True
+MAP_FTP_TIMEOUT_SEC = 30
+# Удалённые пути на FTP/FTPS (абсолютные пути на стороне game-сервера).
+# Пример: "/cstrike/maps", "/home/cs/serverfiles/cstrike/maps"
+MAP_REMOTE_MAPS_DIR = "/cstrike/maps"
+MAP_REMOTE_BASE_DIR = "/cstrike"
+MAP_REMOTE_MODELS_DIR = "/cstrike/models"
+MAP_REMOTE_SOUND_DIR = "/cstrike/sound"
+MAP_REMOTE_SPRITES_DIR = "/cstrike/sprites"
+MAP_REMOTE_GFX_DIR = "/cstrike/gfx"
+MAP_REMOTE_OVERVIEWS_DIR = "/cstrike/overviews"
+MAP_REMOTE_RESOURCE_DIR = "/cstrike/resource"
+MAP_INSTALL_SYNC_TIMEOUT_SEC = 12
+MAP_INSTALL_MAX_FILE_MB = 200
+MAP_INSTALL_WORKDIR = "uploaded_maps"
 #-------------------------------------------------------------------
 
 # Хост и пароль для подключения к серверу (например, игровому серверу)

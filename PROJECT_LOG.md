@@ -1,8 +1,72 @@
-# Журнал проекта
+﻿# Журнал проекта
+
+## 2026-02-17
+- Собран build `0.3-dbg-20260217-13`: для снижения риска порчи памяти в `SendInfoWebhook` большие буферы (`json/player_json/user_name/user_auth`) вынесены в глобальные, добавлен запас `#pragma dynamic 32768`.
+- Собран build `0.3-dbg-20260217-12`: для статуса снова включена отправка `current_players` (`INFO_INCLUDE_PLAYERS 1`), чтобы в Discord отображались ники и группировка по командам.
+- Собран build `0.3-dbg-20260217-11`: добавлена команда `ultrahc_ds_dbg_players` для диагностики реального состава слотов (human/bot/hltv) и сверки с `player_count` в `info`.
+- Собран build `0.3-dbg-20260217-10`: подсчет `player_count` переведен с `get_players()` на прямой обход `1..MaxClients` (исключая только HLTV), чтобы корректно учитывать ботов.
+- Собран build `0.3-dbg-20260217-9`: при `INFO_INCLUDE_PLAYERS 0` AMX теперь отправляет `player_count`, а бот (`webserver/ws_client.py`) использует его для корректного вывода количества игроков без сериализации полного списка `current_players`.
+- Собран build `0.3-dbg-20260217-8` для жесткой изоляции `info`: `INFO_INCLUDE_PLAYERS 0` (в webhook `type=info` уходит пустой `current_players`), чтобы проверить влияние сериализации списка игроков на отказ `ultrahc_ds_send_msg` после входа первого игрока.
+- Для изоляции причины «ломается после входа игрока» собран build `0.3-dbg-20260217-7`: временно отключена SQL/prefix-ветка (`DS_PREFIX_LOOKUP_ENABLED 0`) в `client_putinserver -> ClientPutInhandler/GetMeTime/SQLHandler`.
+- Для проверки гипотезы по HLTV собран build `0.3-dbg-20260217-6`: HLTV исключен из путей `client_putinserver/client_disconnected/GetMeTime` и из списка игроков в `SendInfoWebhook`.
+- Для трассировки `ultrahc_ds_send_msg` собран build `0.3-dbg-20260217-4`: default-команда переведена на wrapper `HookMsgFromDsDefault` с явным debug-маркером маршрута.
+- Для ретеста инцидента повторно включен webhook статуса в AMX (INFO_WEBHOOK_ENABLED 1) и собран новый плагин ultrahc_discord.amxx (build 0.3-dbg-20260217-3).
+- Для диагностики влияния `info` на чат в AMX добавлены ограничители отправки `info` (in-flight + минимальный интервал), разделены callback-и `HTTPCompleteChat/HTTPCompleteInfo` и расширен `ultrahc_ds_diag` (счетчики skip/inflight).
+- Зафиксирован отдельный подробный разбор инцидента по связке AMX <-> бот: `docs/INCIDENT_2026-02-17_STATUS_CHAT_RU.md` (симптомы, таймлайн, все попытки, гипотезы и пошаговый план дальнейшей диагностики).
+- Для временной стабилизации рабочего контура Discord -> CS в `amxmodx_plugin/ultrahc_discord.sma` оставлен fallback на старую логику печати (`HookMsgFromDsOld`) и добавлены тестовые команды `ultrahc_ds_send_msg_new` / `ultrahc_ds_send_msg_old` для A/B-проверок.
+- Временное безопасное состояние на AMX: `INFO_WEBHOOK_ENABLED 0` (канал `info` отключен до завершения точечной диагностики), чатовый поток оставлен рабочим.
+- Исправлена обработка webhook `/webhook` в `webserver/ws_client.py` для кейсов, когда в тело приходит не JSON-объект (например, массив/скаляр): теперь возвращается `400 Bad Request: bad_payload_type` вместо `500 Internal Server Error`.
+- Добавлен безопасный сбор URL запроса (`safe_request_url`) и общий `try/except` в `handle_webhook`, чтобы неожиданные ошибки логировались как `Webhook unhandled exception` с контекстом запроса.
+- Исправлен разбор webhook `type` в `webserver/ws_client.py`: перед маршрутизацией добавлена нормализация значения (`info`/`message`) с удалением пробелов и управляющих символов.
+- Добавлен warning-лог `Webhook normalized type` для диагностики случаев, когда `type` пришёл в нестандартном формате, но был успешно нормализован.
+- Добавлены регрессионные тесты `tests/test_webhook_type.py` для кейсов `in\x00fo`, `mes\nsage`, лишних пробелов и невалидных типов.
+- Добавлен резервный webhook-канал `type_code` (1=info, 2=message): бот может распознать тип даже при битом строковом `type` (`nfo`/`in o`).
+- Добавлен файл `VERSION`: `updater.sh` выводит версию ветки и установленную версию, бот логирует версию при запуске.
+## 2026-02-14
+- После диагностики циклического перезапуска CS-сервера откатан размер `INFO_JSON_LENGTH` в `amxmodx_plugin/ultrahc_discord.sma` с `16384` до `4096`; это убрало падение HLDS при запуске плагина.
+- Проверена ручная сборка AMX-плагина: для локального `amxxpc.exe` используется синтаксис `-o<basename>` (без расширения), пример рабочей команды: `amxxpc.exe ultrahc_discord.sma -oultrahc_discord`.
+- Исправлена регрессия в `rehlds/rcon.py`, из-за которой `getChallenge()` разбирал пакет через `str(bytes).split(" ")` и формировал некорректный RCON-запрос (команда `ultrahc_ds_send_msg` доходила до HLDS, но не исполнялась как AMXX-concmd).
+- В `rehlds/rcon.py` восстановлен устойчивый разбор challenge/response-пакетов (учтены форматы `challenge <num>` и `challenge rcon <num>`, а также префиксы `print`/`l` в ответах команды).
+- Добавлены регрессионные тесты `tests/test_rcon_parsing.py` на разбор challenge и execute-пакетов.
+- Исправлен off-by-one в `TryAppendJsonf()` (`amxmodx_plugin/ultrahc_discord.sma`): для `vformat` теперь используется остаток буфера в формате `charsmax`, чтобы исключить порчу памяти (симптомы: `[EZ_HTTP] Callback function "x" is not exists`, сбои `ezhttp_post`).
+- Усилен обработчик `HookMsgFromDs`: чтение `author/msg` через `read_argv(1/2)` с fallback на `read_args + parse`, добавлен серверный диагностический лог и явный `return PLUGIN_HANDLED`.
+- По запросу откатан разбор `HookMsgFromDs` на классический `read_args + parse` (без `read_argv`), при этом сохранены увеличенные буферы (`DS_SEND_*`) и текущий цветной формат вывода в чат.
+- Бот синхронизирован с текущим форматом `ultrahc_ds_send_msg`: перед отправкой Discord-сообщение теперь приводится к лимитам AMXX-плагина (`author/msg` + общий лимит `read_args`), чтобы аргументы стабильно парсились в `HookMsgFromDs`.
+
+## 2026-02-13
+- ? ???????????? ???????? ?????? ??????? ?????????? `amxxpc.exe` ??? ???????? `.sma` ????? ?????????.
+- ? ???????????? ???????? ???? ??????????? AMX Mod X `D:\cs\compilator_1_9_0` ? ??????? ???????????? ???????? ?????????? `.sma` ????? ?????????.
+- В `updater.sh` добавлено слияние `config.py`: скрипт сохраняет текущие значения и автоматически дописывает недостающие параметры из свежего шаблона репозитория.
+- Добавлена переменная `MERGE_CONFIG_DEFAULTS` (`1` по умолчанию, `0` для отключения автодобавления параметров).
+- В `updater.sh` добавлен аргумент `--branch` (`-b`) для запуска обновления из конкретной ветки репозитория.
+- Добавлен `.gitattributes` с правилом `*.sh eol=lf`, чтобы `updater.sh`/`restore.sh` стабильно запускались на Linux без ручного `sed`.
+- Исправлена сборка webhook `type=info` в AMX-плагине: увеличен буфер JSON и добавлены проверки/ограничение payload, чтобы не ломался `type` при большом списке игроков.
+- Улучшено логирование неизвестного `type` на стороне бота (`repr` + длина) для диагностики битых webhook payload.
+- Обновлена документация (`README.md`, `docs/PROJECT_DOC_RU.md`) по новому поведению обновления конфигурации.
+
+## 2026-02-09
+- `/map_install` расширен для архивов с ресурсами: поддержаны структурные ZIP (`maps/models/sound/sprites/gfx/overviews/resource`) и плоские ZIP с раскладкой по расширению.
+- Добавлена строгая проверка путей в архиве: блокируются абсолютные пути, `..` и конфликтующие целевые дубликаты.
+- FTP-пайплайн переведён на multi-file upload с политикой `skip existing + warning` (без перезаписи существующих файлов на сервере).
+- При частичной ошибке загрузки откат не выполняется: уже загруженные файлы сохраняются, в ответ команды возвращается детальный отчёт по uploaded/skipped/rejected.
+- Добавление карты в ротацию при `add_to_rotation=true` теперь выполняется только при «чистой» установке (без skipped/rejected и с успешной загрузкой `.bsp`).
+- Обновлены `/help`, `README.md`, `docs/PROJECT_DOC_RU.md`, `docs/COMMANDS_REFERENCE_RU.md` и `config.py` под новую схему `MAP_REMOTE_*`.
 
 ## 2026-02-08
+- Добавлены команды `/server_maps` и `/server_maps_installed` для явного чтения карт именно с игрового сервера (активная ротация vs установленные `.bsp` в `maps/`) с пагинацией `page/per_page`.
+- В AMX-плагин добавлена RCON-команда `ultrahc_ds_get_maps <rotation|installed>` с машинно-читаемыми маркерами ответа `ULTRAHC_MAPS_BEGIN/END` для стабильного парсинга ботом.
+- Проведена полная актуализация пользовательской документации (`README.md`, `docs/PROJECT_DOC_RU.md`, `docs/COMMANDS_REFERENCE_RU.md`) под новый production-флоу `/map_install` (FTP/FTPS, фоновые операции, опциональная ротация, обязательные параметры `config.py`).
+- Переведён `/map_install` из тестового режима в прод-пайплайн: загрузка из Discord, валидация `.bsp/.zip`, доставка в `maps/` через FTP/FTPS.
+- Добавлен режим `sync + timeout -> background`: при долгой установке команда отвечает сразу и завершает операцию фоново с отдельным итоговым сообщением.
+- Для `/map_install` добавлены параметры `add_to_rotation` и `priority`; ротация выполняется опционально.
+- Реализованы внутренние маршруты `/db/map_exists`, `/db/map_add_internal`, `/cs/reload_map_list` для безопасной интеграции deploy-пайплайна с БД/Redis/CS.
 - Найдена и исправлена причина обрезки Discord → CS сообщений на 5-8 слове: в `HookMsgFromDs` аргументы команды `ultrahc_ds_send_msg` читались буфером 64 символа.
 - В `amxmodx_plugin/ultrahc_discord.sma` увеличены буферы чтения и парсинга (`cmd_text` до 256, `msg` до 192), поэтому короткие и средние сообщения больше не обрываются на первых словах.
+- Проведено исследование деградации status-канала: узкое место в pull-схеме `status_task -> RCON ultrahc_ds_get_info -> webhook info`, из-за которой обновления могли «замирать» при долгой нестабильности цепочки.
+- Переведено обновление статуса на push-модель: AMX-плагин отправляет `type=info` по событиям (`client_putinserver`, `client_disconnected`, `DeathMsg`, `TeamInfo`) и по heartbeat-таймеру (30 сек).
+- Постоянный polling статуса из `bot/events.py` отключён; RCON оставлен для управляющих команд из Discord.
+- В Python-слое удалены неиспользуемые сущности старого polling-механизма (`status_task`, `BT_CS_Status`, `fetch_status`), чтобы снизить сложность поддержки.
+- Для webhook payload в AMX-плагине увеличен JSON-буфер до 4096, добавлено экранирование спецсимволов (`\`, `"`) и исправлено формирование списка игроков (разделители без ошибок при пропусках), чтобы снизить риск невалидного JSON при онлайне.
 
 ## 2025-12-13
 - Усилена устойчивость обновления статуса CS: если webhook info не пришёл вовремя, бот переподключается автоматически.
@@ -71,3 +135,12 @@
 
 - RCON: откатил парсинг пакетов к стабильной версии до 14.12, чтобы восстановить handshake и команды из Discord → CS.
 - Статус CS теперь вызывается одноразовым RCON-подключением на каждый цикл; таймауты отсутствия webhook лишь логируются, отключение происходит только при реальных ошибках RCON (bad password/unknown command/оффлайн).
+
+
+## 2026-02-17
+- Завершена зачистка AMX-плагина после инцидента status/info: удалены временные debug-команды `ultrahc_ds_send_msg_new`, `ultrahc_ds_send_msg_old`, `ultrahc_ds_send_msg_dbg`, `ultrahc_ds_diag`, `ultrahc_ds_dbg_players`.
+- В боевом режиме оставлен единый маршрут `ultrahc_ds_send_msg -> HookMsgFromDs` с печатью через `client_print_color` (без `server_exec`), что устранило нестабильность Discord -> CS при онлайне игроков.
+- Зафиксирована стабилизация info webhook: сборка JSON усилена буферами/ограничителями, в payload передаётся корректный `player_count`, в боте используется fallback по `type_code`.
+- Обновлён и переписан постмортем `docs/INCIDENT_2026-02-17_STATUS_CHAT_RU.md` с причиной, ходом диагностики и финальной схемой.
+- Пересобран артефакт `amxmodx_plugin/ultrahc_discord.amxx`; компиляция без предупреждений.
+

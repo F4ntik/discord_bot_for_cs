@@ -4,6 +4,7 @@ from cs_server.csrcon import CSRCON, ConnectionError as CSConnectionError, Comma
 import discord
 import asyncio
 import time
+from typing import List
 
 import config
 
@@ -11,11 +12,20 @@ import config
 cs_server: CSRCON = CSRCON(host=config.CS_HOST,
                            password=config.CS_RCON_PASSWORD)
 
-_cs_info_webhook_event: asyncio.Event = asyncio.Event()
-_cs_info_timeout_streak: int = 0
 _connect_guard_lock: asyncio.Lock = asyncio.Lock()
 _last_connect_attempt_at: float = 0.0
 _disconnect_notified: bool = False
+
+MAPS_OUTPUT_BEGIN = "ULTRAHC_MAPS_BEGIN"
+MAPS_OUTPUT_END = "ULTRAHC_MAPS_END"
+MAPS_OUTPUT_ERROR = "ULTRAHC_MAPS_ERROR"
+MAPS_PAGE_DEFAULT = 1
+MAPS_PER_PAGE_DEFAULT = 20
+MAPS_PER_PAGE_MAX = 50
+DISCORD_MESSAGE_SAFE_LIMIT = 1800
+AMXX_DS_SEND_CMD_TEXT_LENGTH = 256
+AMXX_DS_SEND_AUTHOR_LENGTH = 64
+AMXX_DS_SEND_MESSAGE_LENGTH = 192
 
 
 def _mark_connected() -> None:
@@ -41,13 +51,6 @@ def _validate_rcon_response(command: str, response: str) -> None:
   lowered = str(response).lower()
   if "unknown command" in lowered or "bad rcon_password" in lowered or "bad password" in lowered:
     raise CommandExecutionError(f"Команда {command} вернула ошибку: {response}")
-
-@observer.subscribe(Event.WBH_INFO)
-async def _cs_info_webhook_received(data) -> None:
-  global _cs_info_timeout_streak
-  if not _cs_info_webhook_event.is_set():
-    _cs_info_webhook_event.set()
-  _cs_info_timeout_streak = 0
 
 # SECTION Utlities
 
@@ -77,33 +80,170 @@ def escape_rcon_param(value) -> str:
 
   return text
 
+
+def _prepare_ds_send_payload(author: str, content: str) -> tuple[str, str, bool]:
+  """Приводит автора/сообщение к ограничениям AMXX-плагина ultrahc_discord."""
+  safe_author = escape_rcon_param(author).replace("\r", " ").replace("\n", " ").strip()
+  safe_content = escape_rcon_param(content).replace("\r", " ").replace("\n", " ").strip()
+
+  if not safe_author:
+    safe_author = "Discord"
+
+  author_limit = AMXX_DS_SEND_AUTHOR_LENGTH - 1
+  if len(safe_author) > author_limit:
+    safe_author = safe_author[:author_limit]
+
+  # read_args(cmd_text, charsmax) в плагине: payload `"author" "content"` должен влезть в 255 символов.
+  cmd_payload_limit = AMXX_DS_SEND_CMD_TEXT_LENGTH - 1
+  max_content_by_cmd = cmd_payload_limit - (len(safe_author) + 5)  # 5 = две пары кавычек + пробел
+  max_content_by_msg = AMXX_DS_SEND_MESSAGE_LENGTH - 1
+  content_limit = max(0, min(max_content_by_cmd, max_content_by_msg))
+
+  truncated = len(safe_content) > content_limit
+  if content_limit == 0:
+    safe_content = ""
+  elif truncated:
+    safe_content = safe_content[:content_limit]
+
+  return safe_author, safe_content, truncated
+
+
+def _normalize_maps_pagination(page: int, per_page: int) -> tuple[int, int]:
+  page = page or MAPS_PAGE_DEFAULT
+  per_page = per_page or MAPS_PER_PAGE_DEFAULT
+
+  if page < 1:
+    raise ValueError("Параметр page должен быть не меньше 1.")
+
+  if per_page < 1 or per_page > MAPS_PER_PAGE_MAX:
+    raise ValueError(f"Параметр per_page должен быть в диапазоне 1..{MAPS_PER_PAGE_MAX}.")
+
+  return page, per_page
+
+
+def _parse_server_maps_response(command: str, expected_mode: str, response: str) -> List[str]:
+  if response is None:
+    raise CommandExecutionError(f"Команда {command} не вернула данные.")
+
+  lines = [line.strip() for line in str(response).splitlines() if line.strip()]
+  maps: List[str] = []
+  in_section = False
+  end_found = False
+  errors: List[str] = []
+
+  for line in lines:
+    if line.startswith(MAPS_OUTPUT_BEGIN):
+      in_section = True
+      begin_parts = line.split(maxsplit=1)
+      if len(begin_parts) > 1:
+        mode = begin_parts[1].strip().lower()
+        if mode and mode != expected_mode.lower():
+          raise CommandExecutionError(
+            f"Команда {command} вернула режим {mode}, ожидался {expected_mode}."
+          )
+      continue
+
+    if not in_section:
+      continue
+
+    if line.startswith(MAPS_OUTPUT_ERROR):
+      errors.append(line[len(MAPS_OUTPUT_ERROR):].strip() or "unknown_error")
+      continue
+
+    if line.startswith(MAPS_OUTPUT_END):
+      end_found = True
+      break
+
+    maps.append(line)
+
+  if not in_section:
+    raise CommandExecutionError(f"Команда {command} не вернула маркер {MAPS_OUTPUT_BEGIN}.")
+
+  if not end_found:
+    raise CommandExecutionError(
+      f"Команда {command} вернула неполный ответ (нет маркера {MAPS_OUTPUT_END})."
+    )
+
+  if errors:
+    raise CommandExecutionError(f"Команда {command} вернула ошибку: {', '.join(errors)}")
+
+  return maps
+
+
+async def _reply_server_maps(
+  interaction: discord.Interaction,
+  *,
+  mode: str,
+  source_label: str,
+  page: int,
+  per_page: int,
+  sort_result: bool,
+) -> None:
+  try:
+    page, per_page = _normalize_maps_pagination(page, per_page)
+  except ValueError as err:
+    await interaction.followup.send(content=str(err), ephemeral=True)
+    return
+
+  command = f"ultrahc_ds_get_maps {mode}"
+
+  try:
+    response = await cs_server.exec(command)
+    _validate_rcon_response(command, response)
+    maps = _parse_server_maps_response(command, mode, response)
+  except CommandExecutionError as err:
+    logger.error(f"CS Server: {err}")
+    await interaction.followup.send(
+      content="Не удалось получить список карт с сервера. Проверьте логи.",
+      ephemeral=True,
+    )
+    return
+
+  if sort_result:
+    maps = sorted(set(maps), key=str.lower)
+
+  total = len(maps)
+  if total == 0:
+    await interaction.followup.send(
+      content=f"Источник: {source_label}\nСписок карт пуст.",
+      ephemeral=True,
+    )
+    return
+
+  total_pages = (total + per_page - 1) // per_page
+  if page > total_pages:
+    await interaction.followup.send(
+      content=f"Страница {page} недоступна. Доступно страниц: 1..{total_pages}.",
+      ephemeral=True,
+    )
+    return
+
+  start = (page - 1) * per_page
+  end = min(start + per_page, total)
+  lines = [
+    f"Источник: {source_label}",
+    f"Всего карт: {total}",
+    f"Страница {page}/{total_pages}",
+    "",
+  ]
+  lines.extend(f"{idx}. {name}" for idx, name in enumerate(maps[start:end], start=start + 1))
+
+  content = "\n".join(lines)
+  if len(content) > DISCORD_MESSAGE_SAFE_LIMIT:
+    await interaction.followup.send(
+      content=(
+        "Ответ не помещается в лимит Discord для текущего per_page. "
+        "Уменьшите per_page (например, до 20)."
+      ),
+      ephemeral=True,
+    )
+    return
+
+  await interaction.followup.send(content=content, ephemeral=True)
+
 # !SECTION
 
 # SECTION Events
-# -- get_status 
-@observer.subscribe(Event.BT_CS_Status)
-async def get_status():
-  global _cs_info_timeout_streak
-  if not cs_server.connected:
-    return
-  
-  try:
-    _cs_info_webhook_event.clear()
-    response = await cs_server.exec_fresh("ultrahc_ds_get_info", validate_password=False)
-    _validate_rcon_response("ultrahc_ds_get_info", response)
-
-    timeout = getattr(config, "CS_INFO_WEBHOOK_TIMEOUT", 12)
-    if timeout and timeout > 0:
-      try:
-        await asyncio.wait_for(_cs_info_webhook_event.wait(), timeout=timeout)
-      except asyncio.TimeoutError:
-        _cs_info_timeout_streak += 1
-        logger.error(f"CS Server: Таймаут ожидания webhook info ({timeout}с), подряд: {_cs_info_timeout_streak}")
-  except CommandExecutionError as err:
-    logger.error(f"CS Server: {err}")
-    await cs_server.disconnect()
-    await _notify_cs_disconnected_once()
-
 # -- on_ready connect
 @observer.subscribe(Event.BE_READY)
 @nsroute.create_route("/connect_to_cs")
@@ -136,11 +276,16 @@ async def connect():
 async def send_message(data):
   message: discord.Message = data[Param.Message]
 
-  author = escape_rcon_param(message.author.display_name)
-  content = escape_rcon_param(message.content)
+  author, content, truncated = _prepare_ds_send_payload(message.author.display_name, message.content)
+  if not content:
+    logger.info("CS Server: пропуск отправки пустого сообщения в CS")
+    return
+
   command = f"ultrahc_ds_send_msg \"{author}\" \"{content}\""
   
   try:
+    if truncated:
+      logger.info(f"CS Server: сообщение от {author} обрезано до {len(content)} символов под лимиты AMXX")
     logger.info(f"CS Server: отправка сообщения в CS от {author} (len={len(content)})")
     response = await cs_server.exec(command)
     _validate_rcon_response("ultrahc_ds_send_msg", response)
@@ -301,6 +446,38 @@ async def cmd_sync_maps(data):
     logger.error(f"CS Server: {err}")
     await interaction.followup.send(content="Не удалось", ephemeral=True)
 
+
+# -- server_maps
+@observer.subscribe(Event.BC_CS_SERVER_MAPS)
+@require_connection
+async def cmd_server_maps(data):
+  interaction: discord.Interaction = data[Param.Interaction]
+
+  await _reply_server_maps(
+    interaction,
+    mode="rotation",
+    source_label="CS server (active rotation)",
+    page=int(data.get("page", MAPS_PAGE_DEFAULT)),
+    per_page=int(data.get("per_page", MAPS_PER_PAGE_DEFAULT)),
+    sort_result=False,
+  )
+
+
+# -- server_maps_installed
+@observer.subscribe(Event.BC_CS_SERVER_MAPS_INSTALLED)
+@require_connection
+async def cmd_server_maps_installed(data):
+  interaction: discord.Interaction = data[Param.Interaction]
+
+  await _reply_server_maps(
+    interaction,
+    mode="installed",
+    source_label="CS server (maps folder)",
+    page=int(data.get("page", MAPS_PAGE_DEFAULT)),
+    per_page=int(data.get("per_page", MAPS_PER_PAGE_DEFAULT)),
+    sort_result=True,
+  )
+
 # -- map_change
 @observer.subscribe(Event.BC_CS_MAP_CHANGE)
 @require_connection
@@ -324,3 +501,17 @@ async def cmd_map_change(data):
     await interaction.followup.send(content="Не удалось сменить карту", ephemeral=True)
 
 # !SECTION
+
+@nsroute.create_route("/cs/reload_map_list")
+async def route_cs_reload_map_list():
+  if not cs_server.connected:
+    return {"status": "not_connected"}
+
+  command = "ultrahc_ds_reload_map_list"
+  try:
+    response = await cs_server.exec(command)
+    _validate_rcon_response(command, response)
+    return {"status": "ok"}
+  except CommandExecutionError as err:
+    logger.error(f"CS Server: route /cs/reload_map_list failed: {err}")
+    return {"status": "error", "error": str(err)}
