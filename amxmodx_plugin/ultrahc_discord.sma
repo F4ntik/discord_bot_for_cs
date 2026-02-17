@@ -7,7 +7,7 @@
 #tryinclude <map_manager>
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.3"
+#define PLUGIN_VERSION 	"0.3-dbg-20260217-11"
 #define PLUGIN_AUTHOR 	"Asura"
 
 //-----------------------------------------
@@ -23,9 +23,15 @@
 #define DS_SEND_CMD_TEXT_LENGTH 256
 #define DS_SEND_AUTHOR_LENGTH 64
 #define DS_SEND_MESSAGE_LENGTH 192
+#define WEBHOOK_TYPE_CODE_INFO 1
+#define WEBHOOK_TYPE_CODE_MESSAGE 2
+#define INFO_WEBHOOK_ENABLED 1
 #define INFO_JSON_LENGTH 4096
 #define INFO_PUSH_DEBOUNCE_SEC 1.0
 #define INFO_PUSH_HEARTBEAT_SEC 30.0
+#define INFO_MIN_POST_INTERVAL_SEC 0.8
+#define INFO_INCLUDE_PLAYERS 0
+#define DS_PREFIX_LOOKUP_ENABLED 0
 #define TASK_INFO_PUSH 60001
 #define TASK_INFO_HEARTBEAT 60002
 #define MAP_QUERY_MODE_LENGTH 32
@@ -64,6 +70,10 @@ new const __saytext_teams[][] = {
 new __cvar_str_list[ECvarsList][CVARS_LENGTH];
 
 new Handle:__sql_handle;
+new bool:g_info_request_in_flight = false;
+new Float:g_info_last_send_time = 0.0;
+new g_info_skip_inflight = 0;
+new g_info_skip_rate = 0;
 
 // new big_string[5000];
 
@@ -75,14 +85,35 @@ public plugin_init() {
 	
 	register_clcmd(MESSAGEMODE_NAME, "MessageModeCallback");
 	
-	register_concmd("ultrahc_ds_send_msg", "HookMsgFromDs");
+	// Default Discord->CS path uses legacy-stable formatter (client_print_color)
+	register_srvcmd("ultrahc_ds_send_msg", "HookMsgFromDsDefault");
+	register_concmd("ultrahc_ds_send_msg", "HookMsgFromDsDefault");
+	register_clcmd("ultrahc_ds_send_msg", "HookMsgFromDsDefault", ADMIN_RCON);
+	register_srvcmd("ultrahc_ds_send_msg_dbg", "HookMsgFromDsDefault");
+	register_concmd("ultrahc_ds_send_msg_dbg", "HookMsgFromDsDefault");
+	register_clcmd("ultrahc_ds_send_msg_dbg", "HookMsgFromDsDefault", ADMIN_RCON);
+	// Keep the newer variant under explicit test command
+	register_srvcmd("ultrahc_ds_send_msg_new", "HookMsgFromDs");
+	register_concmd("ultrahc_ds_send_msg_new", "HookMsgFromDs");
+	register_clcmd("ultrahc_ds_send_msg_new", "HookMsgFromDs", ADMIN_RCON);
+	register_srvcmd("ultrahc_ds_send_msg_old", "HookMsgFromDsOld");
+	register_concmd("ultrahc_ds_send_msg_old", "HookMsgFromDsOld");
+	register_clcmd("ultrahc_ds_send_msg_old", "HookMsgFromDsOld", ADMIN_RCON);
+	register_srvcmd("ultrahc_ds_diag", "HookDiagCmd");
+	register_concmd("ultrahc_ds_diag", "HookDiagCmd");
+	register_clcmd("ultrahc_ds_diag", "HookDiagCmd", ADMIN_RCON);
+	register_srvcmd("ultrahc_ds_dbg_players", "HookDbgPlayersCmd");
+	register_concmd("ultrahc_ds_dbg_players", "HookDbgPlayersCmd");
+	register_clcmd("ultrahc_ds_dbg_players", "HookDbgPlayersCmd", ADMIN_RCON);
 	register_concmd("ultrahc_ds_change_map", "HookChangeMapCmd");
 	register_concmd("ultrahc_ds_kick_player", "HookKickPlayerCmd");
 	register_concmd("ultrahc_ds_get_maps", "HookGetMapsCmd");
 	
 	register_concmd("ultrahc_ds_get_info", "HookGetinfoCmd");
-	register_event("DeathMsg", "OnDeathMsg", "a");
-	register_event("TeamInfo", "OnTeamInfo", "a");
+	#if INFO_WEBHOOK_ENABLED
+		register_event("DeathMsg", "OnDeathMsg", "a");
+		register_event("TeamInfo", "OnTeamInfo", "a");
+	#endif
 	
 	#if defined _map_manager_core_included
 		register_concmd("ultrahc_ds_reload_map_list", "HookReloadMapList");
@@ -97,10 +128,13 @@ public plugin_init() {
 	bind_pcvar_string(create_cvar("ultrahc_ds_sql_pass", ""), __cvar_str_list[_sql_pass], CVARS_LENGTH);
 	bind_pcvar_string(create_cvar("ultrahc_ds_sql_db", ""), __cvar_str_list[_sql_db], CVARS_LENGTH);
 
-	set_task(INFO_PUSH_HEARTBEAT_SEC, "InfoHeartbeatTask", TASK_INFO_HEARTBEAT, "", 0, "b");
-	ScheduleInfoPush(5.0);
+	#if INFO_WEBHOOK_ENABLED
+		set_task(INFO_PUSH_HEARTBEAT_SEC, "InfoHeartbeatTask", TASK_INFO_HEARTBEAT, "", 0, "b");
+		ScheduleInfoPush(5.0);
+	#endif
 	
 	AutoExecConfig(true, PLUGIN_CFG_NAME);
+	server_print("[ultrahc_discord] loaded build=%s", PLUGIN_VERSION);
 }
 
 //-----------------------------------------
@@ -113,18 +147,30 @@ public OnConfigsExecuted() {
 //-----------------------------------------
 
 public client_putinserver(client_id) {
-	if(is_user_bot(client_id)) return;
+	if(is_user_bot(client_id) || is_user_hltv(client_id)) return;
 
-	ScheduleInfoPush();
-	set_task(1.0, "ClientPutInhandler", client_id);
+	#if INFO_WEBHOOK_ENABLED
+		ScheduleInfoPush();
+	#endif
+	#if DS_PREFIX_LOOKUP_ENABLED
+		set_task(1.0, "ClientPutInhandler", client_id);
+	#endif
 }
 
 public client_disconnected(client_id) {
-	ScheduleInfoPush();
+	if(is_user_hltv(client_id)) return;
+
+	#if INFO_WEBHOOK_ENABLED
+		ScheduleInfoPush();
+	#endif
 }
 
 //-----------------------------------------
 public ClientPutInhandler(client_id) {
+	#if !DS_PREFIX_LOOKUP_ENABLED
+		return;
+	#endif
+
 	if(!ultrahc_is_pref_file_load()) {
 		set_task(1.0, "ClientPutInhandler", client_id);
 		return;
@@ -133,6 +179,12 @@ public ClientPutInhandler(client_id) {
 }
 	
 public GetMeTime(client_id) {
+	#if !DS_PREFIX_LOOKUP_ENABLED
+		return;
+	#endif
+
+	if(!is_user_connected(client_id) || is_user_hltv(client_id) || is_user_bot(client_id)) return;
+
 	new steam_id[32];
 	get_user_authid(client_id, steam_id, charsmax(steam_id));
 	
@@ -146,6 +198,10 @@ public GetMeTime(client_id) {
 }
 
 public SQLHandler(failstate, Handle:query, error[], errnum, data[], size, queuetime) {
+	#if !DS_PREFIX_LOOKUP_ENABLED
+		return;
+	#endif
+
 	// failstate:
 	// #define TQUERY_CONNECT_FAILED -2
 	// #define TQUERY_QUERY_FAILED -1
@@ -227,6 +283,7 @@ public SayMessageHandler(owner_id) {
 	get_user_authid(owner_id, steam_id, charsmax(steam_id));
   
 	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"type^": ^"message^",");
+	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"type_code^": %i,", WEBHOOK_TYPE_CODE_MESSAGE);
 	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"nick^": ^"%s^",", owner_name);
 	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"message^": ^"%s^",", con_cmd_text);
 	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"team^": %i,", owner_team);
@@ -237,7 +294,7 @@ public SayMessageHandler(owner_id) {
 
 	ezhttp_option_set_body(options_id, json)
 
-	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPComplete", options_id)
+	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPCompleteChat", options_id)
 	
 	return PLUGIN_CONTINUE;
 }
@@ -296,7 +353,7 @@ public MessageModeCallback(owner_id) {
 
 	ezhttp_option_set_body(options_id, json)
 
-	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPComplete", options_id)
+	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPCompleteChat", options_id)
 	
 	return PLUGIN_HANDLED;
 }
@@ -310,8 +367,29 @@ public OnTeamInfo() {
 }
 
 ScheduleInfoPush(Float:delay = INFO_PUSH_DEBOUNCE_SEC) {
+	#if !INFO_WEBHOOK_ENABLED
+		return;
+	#endif
+
 	if(task_exists(TASK_INFO_PUSH)) return;
 	set_task(delay, "SendInfoSnapshotTask", TASK_INFO_PUSH);
+}
+
+stock bool:TryAppendJsonf(json[], json_size, &json_len, const fmt[], any:...) {
+	// vformat ожидает maxlen в формате charsmax (без завершающего '\0'),
+	// поэтому оставляем один байт под null-terminator.
+	new remaining = json_size - json_len - 1;
+	if(remaining <= 0) {
+		return false;
+	}
+
+	new written = vformat(json[json_len], remaining, fmt, 5);
+	if(written < 0 || written > remaining) {
+		return false;
+	}
+
+	json_len += written;
+	return true;
 }
 
 public SendInfoSnapshotTask() {
@@ -323,85 +401,237 @@ public InfoHeartbeatTask() {
 }
 
 SendInfoWebhook() {
+	new Float:now = get_gametime();
+	if(g_info_request_in_flight) {
+		g_info_skip_inflight++;
+		return;
+	}
+
+	if(now - g_info_last_send_time < INFO_MIN_POST_INTERVAL_SEC) {
+		g_info_skip_rate++;
+		return;
+	}
+
 	// send to discord webhook
 	new EzHttpOptions:options_id = ezhttp_create_options()
+	if(!options_id) {
+		server_print("[ultrahc_discord] info webhook build failed: options alloc");
+		return;
+	}
 	
 	ezhttp_option_set_header(options_id, "Authorization", __cvar_str_list[_webhook_token])
 	ezhttp_option_set_header(options_id, "Content-Type", "application/json")
   
 	new json[INFO_JSON_LENGTH];
 	new json_len = 0;
+	new bool:payload_truncated = false;
   
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "{");
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "{")) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot start json");
+		return;
+	}
 	
 	new map_name[32];
 	get_mapname(map_name, charsmax(map_name));
 	replace_all(map_name, charsmax(map_name), "\\", "\\\\");
 	replace_all(map_name, charsmax(map_name), "^"", "'");
   
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"type^":^"info^",");
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"map^":^"%s^",", map_name);
-	
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"current_players^":[");
-	
-	new players[MAX_PLAYERS], num;
-	get_players(players, num);
-	
-	new added_players = 0;
-	for(new i=0; i < num; i++) {
-		new id = players[i];
-	
-		if(!is_user_connected(id)) continue;
-		
-		new user_name[MAX_NAME_LENGTH];
-		get_user_name(id, user_name, charsmax(user_name));
-		
-		new user_auth[64];
-		get_user_authid(id, user_auth, charsmax(user_auth));
-		
-		replace_all(user_name, charsmax(user_name), "\\", "\\\\");
-		replace_all(user_name, charsmax(user_name), "^"", "'");
-		replace_all(user_auth, charsmax(user_auth), "\\", "\\\\");
-		replace_all(user_auth, charsmax(user_auth), "^"", "'");
-		
-		new user_frags = get_user_frags(id);
-		new user_deaths = get_user_deaths(id);
-		new user_team = get_user_team(id);
-
-		if(added_players > 0) {
-			json_len += formatex(json[json_len], charsmax(json) - json_len, ",");
-		}
-		
-		json_len += formatex(json[json_len], charsmax(json) - json_len, "{^"name^":^"%s^",", user_name);
-		json_len += formatex(json[json_len], charsmax(json) - json_len, "^"steam_id^":^"%s^",", user_auth);
-		json_len += formatex(json[json_len], charsmax(json) - json_len, "^"stats^":[%i, %i, %i]}", user_frags, user_deaths, user_team);
-		added_players++;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"type^":^"info^",^"type_code^":%i,", WEBHOOK_TYPE_CODE_INFO)) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append type");
+		return;
+	}
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"map^":^"%s^",", map_name)) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append map");
+		return;
 	}
 	
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "],");
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"current_players^":[")) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append current_players start");
+		return;
+	}
+
+	new added_players = 0;
+	new player_count = 0;
+	for(new id = 1; id <= MaxClients; id++) {
+		if(!is_user_connected(id) || is_user_hltv(id)) continue;
+		player_count++;
+	}
+
+	#if INFO_INCLUDE_PLAYERS
+		for(new id = 1; id <= MaxClients; id++) {
+			if(!is_user_connected(id) || is_user_hltv(id)) continue;
+			
+			new user_name[MAX_NAME_LENGTH];
+			get_user_name(id, user_name, charsmax(user_name));
+			
+			new user_auth[64];
+			get_user_authid(id, user_auth, charsmax(user_auth));
+			
+			replace_all(user_name, charsmax(user_name), "\\", "\\\\");
+			replace_all(user_name, charsmax(user_name), "^"", "'");
+			replace_all(user_auth, charsmax(user_auth), "\\", "\\\\");
+			replace_all(user_auth, charsmax(user_auth), "^"", "'");
+			
+			new user_frags = get_user_frags(id);
+			new user_deaths = get_user_deaths(id);
+			new user_team = get_user_team(id);
+
+			new player_json[384];
+			new player_json_len = formatex(
+				player_json,
+				charsmax(player_json),
+				"{^"name^":^"%s^",^"steam_id^":^"%s^",^"stats^":[%i, %i, %i]}",
+				user_name,
+				user_auth,
+				user_frags,
+				user_deaths,
+				user_team
+			);
+
+			// Если запись игрока не помещается в буфер строки, пропускаем оставшихся, чтобы не сломать JSON.
+			if(player_json_len <= 0 || player_json_len >= charsmax(player_json)) {
+				payload_truncated = true;
+				break;
+			}
+
+			new required = player_json_len;
+			if(added_players > 0) {
+				required += 1;
+			}
+
+			// Резервируем место под закрытие массива/объекта и max_players.
+			if(json_len + required + 64 >= sizeof(json)) {
+				payload_truncated = true;
+				break;
+			}
+
+			if(added_players > 0) {
+				if(!TryAppendJsonf(json, sizeof(json), json_len, ",")) {
+					payload_truncated = true;
+					break;
+				}
+			}
+
+			if(!TryAppendJsonf(json, sizeof(json), json_len, "%s", player_json)) {
+				payload_truncated = true;
+				break;
+			}
+			added_players++;
+		}
+	#endif
 	
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "^"max_players^":%i", MaxClients);
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "],")) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot close players array");
+		return;
+	}
+
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"player_count^":%i,", player_count)) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append player_count");
+		return;
+	}
+	
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"max_players^":%i", MaxClients)) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot append max_players");
+		return;
+	}
   
-	json_len += formatex(json[json_len], charsmax(json) - json_len, "}");
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "}")) {
+		server_print("[ultrahc_discord] info webhook build failed: cannot close json");
+		return;
+	}
+
+	if(payload_truncated) {
+		server_print("[ultrahc_discord] info webhook payload truncated: players=%d", added_players);
+	}
 
 	ezhttp_option_set_body(options_id, json)
 
-	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPComplete", options_id)
+	g_info_request_in_flight = true;
+	g_info_last_send_time = now;
+	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPCompleteInfo", options_id)
 }
 
 //-----------------------------------------
 
-public HTTPComplete(EzHttpRequest:request_id) {
+public HTTPCompleteChat(EzHttpRequest:request_id) {
 	if (ezhttp_get_error_code(request_id) != EZH_OK) {
       new error[64];
       ezhttp_get_error_message(request_id, error, charsmax(error));
-      server_print("Response error: %s", error);
+      server_print("Response error(chat): %s", error);
       return;
   }
 
 	new data[512];
 	ezhttp_get_data(request_id, data, charsmax(data));
-	server_print("Response data: %s", data);
+	server_print("Response data(chat): %s", data);
+}
+
+public HTTPCompleteInfo(EzHttpRequest:request_id) {
+	g_info_request_in_flight = false;
+
+	if (ezhttp_get_error_code(request_id) != EZH_OK) {
+      new error[64];
+      ezhttp_get_error_message(request_id, error, charsmax(error));
+      server_print("Response error(info): %s", error);
+      return;
+  }
+
+	new data[128];
+	ezhttp_get_data(request_id, data, charsmax(data));
+	server_print("Response data(info): %s", data);
+}
+
+//-----------------------------------------
+
+public HookDiagCmd() {
+	server_print(
+		"[ultrahc_discord] diag ok build=%s info_inflight=%d skip_inflight=%d skip_rate=%d",
+		PLUGIN_VERSION,
+		g_info_request_in_flight ? 1 : 0,
+		g_info_skip_inflight,
+		g_info_skip_rate
+	);
+	return PLUGIN_HANDLED;
+}
+
+public HookDbgPlayersCmd() {
+	new connected_non_hltv = 0;
+	new humans = 0;
+	new bots = 0;
+	new hltv = 0;
+
+	for(new id = 1; id <= MaxClients; id++) {
+		if(!is_user_connected(id)) continue;
+
+		new name[MAX_NAME_LENGTH];
+		get_user_name(id, name, charsmax(name));
+
+		if(is_user_hltv(id)) {
+			hltv++;
+			server_print("[ultrahc_discord][dbg] slot=%d hltv=1 bot=%d name='%s'", id, is_user_bot(id), name);
+			continue;
+		}
+
+		connected_non_hltv++;
+		if(is_user_bot(id)) {
+			bots++;
+		} else {
+			humans++;
+		}
+
+		server_print("[ultrahc_discord][dbg] slot=%d hltv=0 bot=%d name='%s'", id, is_user_bot(id), name);
+	}
+
+	server_print(
+		"[ultrahc_discord][dbg] players summary non_hltv=%d humans=%d bots=%d hltv=%d max=%d",
+		connected_non_hltv,
+		humans,
+		bots,
+		hltv,
+		MaxClients
+	);
+
+	return PLUGIN_HANDLED;
 }
 
 //-----------------------------------------
@@ -422,7 +652,12 @@ public HookChangeMapCmd() {
 //-----------------------------------------
 
 public HookGetinfoCmd() {
-	SendInfoWebhook();
+	#if INFO_WEBHOOK_ENABLED
+		SendInfoWebhook();
+	#else
+		server_print("[ultrahc_discord] info webhook disabled");
+	#endif
+	return PLUGIN_HANDLED;
 }
 
 //-----------------------------------------
@@ -551,15 +786,67 @@ public HookKickPlayerCmd() {
 }
 
 //-----------------------------------------
-
 public HookMsgFromDs() {
 	new cmd_text[DS_SEND_CMD_TEXT_LENGTH];
 	read_args(cmd_text, charsmax(cmd_text));
+	server_print("[ultrahc_discord][dbg] HookMsgFromDs raw='%s'", cmd_text);
 	
 	new author[DS_SEND_AUTHOR_LENGTH];
 	new msg[DS_SEND_MESSAGE_LENGTH];
+
+	// Prefer argv parsing for quoted args: ultrahc_ds_send_msg "author" "message"
+	read_argv(1, author, charsmax(author));
+	read_argv(2, msg, charsmax(msg));
+
+	// Fallback for edge cases where argv is unavailable/empty
+	if(!author[0] || !msg[0]) {
+		parse(cmd_text, author, charsmax(author), msg, charsmax(msg));
+	}
+
+	if(!author[0] || !msg[0]) {
+		server_print("[ultrahc_discord][dbg] HookMsgFromDs empty parsed values");
+		return PLUGIN_HANDLED;
+	}
+
+	new players[32], num;
+	get_players(players, num, "ch");
+	server_print("[ultrahc_discord][dbg] HookMsgFromDs recipients=%d", num);
+
+	replace_all(author, charsmax(author), "^"", "'");
+	replace_all(msg, charsmax(msg), "^"", "'");
+	replace_all(author, charsmax(author), ";", ",");
+	replace_all(msg, charsmax(msg), ";", ",");
+
+	client_print(0, print_chat, "[Discord] %s : %s", author, msg);
+	server_cmd("say [Discord] %s : %s", author, msg);
+	server_exec();
+	server_print("[ultrahc_discord][dbg] HookMsgFromDs say sent");
+
+	return PLUGIN_HANDLED;
+}
+
+public HookMsgFromDsDefault() {
+	server_print("[ultrahc_discord][dbg] HookMsgFromDsDefault route");
+	return HookMsgFromDsOld();
+}
+
+public HookMsgFromDsOld() {
+	new cmd_text[DS_SEND_CMD_TEXT_LENGTH];
+	read_args(cmd_text, charsmax(cmd_text));
+	server_print("[ultrahc_discord][dbg] HookMsgFromDsOld raw='%s'", cmd_text);
+
+	new author[DS_SEND_AUTHOR_LENGTH];
+	new msg[DS_SEND_MESSAGE_LENGTH];
 	parse(cmd_text, author, charsmax(author), msg, charsmax(msg));
+
+	if(!author[0] || !msg[0]) {
+		server_print("[ultrahc_discord][dbg] HookMsgFromDsOld empty parsed values");
+		return PLUGIN_HANDLED;
+	}
+
 	client_print_color(0, print_team_blue, "%s ^3%s^1 : ^4%s", DISCORD_PREFIX, author, msg);
+	server_print("[ultrahc_discord][dbg] HookMsgFromDsOld client_print_color sent");
+	return PLUGIN_HANDLED;
 }
 
 //-----------------------------------------

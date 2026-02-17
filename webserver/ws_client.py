@@ -47,8 +47,12 @@ def format_message(nick, cs_message, team, channel_prefix):
   return f"{Color.Green}{timestamp}{Color.Default} {channel_prefix} {nick_color}{nick}{Color.Default}: {cs_message}\n"
 
 # -- format_info_message
-def format_info_message(map_name, current_players, max_players):
-  player_count = len(current_players)
+def format_info_message(map_name, current_players, max_players, player_count_override=None):
+  player_count = (
+    player_count_override
+    if isinstance(player_count_override, int) and player_count_override >= 0
+    else len(current_players)
+  )
   team_players = {1: [], 2: [], 3: []}
 
   for player in current_players:
@@ -199,13 +203,19 @@ async def handle_info(data):
     map_name = data.get('map')
     current_players = data.get('current_players', [])
     max_players = data.get('max_players')
+    player_count = data.get('player_count')
 
-    formatted_info = format_info_message(map_name, current_players, max_players)
+    formatted_info = format_info_message(
+      map_name,
+      current_players,
+      max_players,
+      player_count_override=player_count
+    )
 
     logger.info(
       "Webhook info received: map=%s players=%s/%s",
       map_name,
-      len(current_players) if isinstance(current_players, list) else "?",
+      player_count if isinstance(player_count, int) else (len(current_players) if isinstance(current_players, list) else "?"),
       max_players,
     )
 
