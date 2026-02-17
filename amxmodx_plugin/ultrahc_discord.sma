@@ -1,4 +1,5 @@
 #include <amxmodx>
+#include <csx>
 #include <file>
 #include <ultrahc_chat_manager>
 #include <easy_http>
@@ -9,7 +10,7 @@
 #pragma dynamic 32768
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.4.15"
+#define PLUGIN_VERSION 	"0.4.20"
 #define PLUGIN_AUTHOR 	"Asura, Mep3ocTb"
 
 //-----------------------------------------
@@ -83,6 +84,8 @@ new g_info_skip_rate = 0;
 new g_round_number = 0;
 new g_score_t = 0;
 new g_score_ct = 0;
+new g_planted_bomb_slot = 0;
+new g_planted_bomb_steam_id[64];
 
 // new big_string[5000];
 
@@ -107,7 +110,10 @@ public plugin_init() {
 		register_event("TeamInfo", "OnTeamInfo", "a");
 		register_event("TeamScore", "OnTeamScore", "a");
 		register_logevent("OnRoundStart", 2, "1=Round_Start");
-		register_logevent("OnBombLogEvent", 3);
+		register_logevent("OnBombPlantedLog", 3, "2=triggered", "3=Planted_The_Bomb");
+		register_logevent("OnBombDroppedLog", 3, "2=triggered", "3=Dropped_The_Bomb");
+		register_logevent("OnBombGotLog", 3, "2=triggered", "3=Got_The_Bomb");
+		register_logevent("OnBombSpawnedLog", 3, "2=triggered", "3=Spawned_With_The_Bomb");
 	#endif
 	
 	#if defined _map_manager_core_included
@@ -125,6 +131,7 @@ public plugin_init() {
 	g_round_number = 0;
 	g_score_t = 0;
 	g_score_ct = 0;
+	ResetPlantedBombState();
 
 	#if INFO_WEBHOOK_ENABLED
 		set_task(INFO_PUSH_HEARTBEAT_SEC, "InfoHeartbeatTask", TASK_INFO_HEARTBEAT, "", 0, "b");
@@ -379,21 +386,68 @@ public OnTeamScore() {
 }
 
 public OnRoundStart() {
+	ResetPlantedBombState();
 	g_round_number++;
 	ScheduleInfoPush();
 }
 
-public OnBombLogEvent() {
-	new event_line[256];
-	read_logargv(0, event_line, charsmax(event_line));
+public OnBombPlantedLog() {
+	CapturePlantedBombOwnerFromLog();
+	ScheduleInfoPush();
+}
+
+public OnBombDroppedLog() {
+	ScheduleInfoPush();
+}
+
+public OnBombGotLog() {
+	ScheduleInfoPush();
+}
+
+public OnBombSpawnedLog() {
+	ScheduleInfoPush();
+}
+
+public bomb_planted(planter) {
+	new planter_slot = planter;
+	if(planter_slot <= 0 || planter_slot > MaxClients || !is_user_connected(planter_slot)) {
+		if(planter > 0) {
+			planter_slot = find_player("k", planter);
+		}
+	}
+
+	if(SetPlantedBombOwner(planter_slot)) {
+		server_print("[ultrahc_discord] bomb_planted forward: raw=%d resolved_slot=%d authid=%s", planter, planter_slot, g_planted_bomb_steam_id);
+	} else {
+		server_print("[ultrahc_discord] bomb_planted forward unresolved: raw=%d", planter);
+	}
+
+	ScheduleInfoPush();
+}
+
+public plugin_log() {
+	#if !INFO_WEBHOOK_ENABLED
+		return PLUGIN_CONTINUE;
+	#endif
+
+	new log_line[256];
+	read_logdata(log_line, charsmax(log_line));
+
+	if(containi(log_line, "Planted_The_Bomb") != -1) {
+		CapturePlantedBombOwnerFromLog();
+		ScheduleInfoPush();
+		return PLUGIN_CONTINUE;
+	}
 
 	if(
-		containi(event_line, "Dropped_The_Bomb") != -1
-		|| containi(event_line, "Got_The_Bomb") != -1
-		|| containi(event_line, "Spawned_With_The_Bomb") != -1
+		containi(log_line, "Dropped_The_Bomb") != -1
+		|| containi(log_line, "Got_The_Bomb") != -1
+		|| containi(log_line, "Spawned_With_The_Bomb") != -1
 	) {
 		ScheduleInfoPush();
 	}
+
+	return PLUGIN_CONTINUE;
 }
 
 ScheduleInfoPush(Float:delay = INFO_PUSH_DEBOUNCE_SEC) {
@@ -457,7 +511,12 @@ SendInfoWebhook() {
 	new map_timeleft_sec = get_timeleft();
 	new bomb_carrier_steam_id[64];
 	new bomb_carrier_slot = 0;
+	new planted_bomb_steam_id[64];
+	new planted_bomb_slot = g_planted_bomb_slot;
 	GetBombCarrier(bomb_carrier_steam_id, charsmax(bomb_carrier_steam_id), bomb_carrier_slot);
+	copy(planted_bomb_steam_id, charsmax(planted_bomb_steam_id), g_planted_bomb_steam_id);
+	replace_all(planted_bomb_steam_id, charsmax(planted_bomb_steam_id), "\\", "\\\\");
+	replace_all(planted_bomb_steam_id, charsmax(planted_bomb_steam_id), "^"", "'");
   
 	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "{")) {
 		server_print("[ultrahc_discord] info webhook build failed: cannot start json");
@@ -586,7 +645,16 @@ SendInfoWebhook() {
 		return;
 	}
 
-	if(!TryAppendJsonf(g_info_json, sizeof(g_info_json), json_len, "^"bomb_carrier_steam_id^":^"%s^",^"bomb_carrier_slot^":%i", bomb_carrier_steam_id, bomb_carrier_slot)) {
+	if(!TryAppendJsonf(
+		g_info_json,
+		sizeof(g_info_json),
+		json_len,
+		"^"bomb_carrier_steam_id^":^"%s^",^"bomb_carrier_slot^":%i,^"planted_bomb_steam_id^":^"%s^",^"planted_bomb_slot^":%i",
+		bomb_carrier_steam_id,
+		bomb_carrier_slot,
+		planted_bomb_steam_id,
+		planted_bomb_slot
+	)) {
 		server_print("[ultrahc_discord] info webhook build failed: cannot append bomb_carrier_steam_id");
 		return;
 	}
@@ -622,6 +690,101 @@ stock GetBombCarrier(output[], output_len, &bomb_carrier_slot) {
 		replace_all(output, output_len, "^"", "'");
 		return;
 	}
+}
+
+stock ResetPlantedBombState() {
+	g_planted_bomb_slot = 0;
+	g_planted_bomb_steam_id[0] = '^0';
+}
+
+stock CapturePlantedBombOwnerFromLog() {
+	ResetPlantedBombState();
+
+	new log_user[128];
+	read_logargv(0, log_user, charsmax(log_user));
+
+	new planter_name[MAX_NAME_LENGTH];
+	new planter_authid[64];
+	new planter_team[32];
+	new planter_userid = -1;
+	parse_loguser(log_user, planter_name, charsmax(planter_name), planter_userid, planter_authid, charsmax(planter_authid), planter_team, charsmax(planter_team));
+
+	// Самый надежный путь: userid из логов однозначно маппится на текущий слот игрока.
+	if(planter_userid > 0) {
+		g_planted_bomb_slot = find_player("k", planter_userid);
+	}
+
+	if(g_planted_bomb_slot > 0) {
+		SetPlantedBombOwner(g_planted_bomb_slot);
+		server_print("[ultrahc_discord] planted capture: userid=%d slot=%d authid=%s", planter_userid, g_planted_bomb_slot, g_planted_bomb_steam_id);
+		return;
+	}
+
+	if(planter_authid[0]) {
+		copy(g_planted_bomb_steam_id, charsmax(g_planted_bomb_steam_id), planter_authid);
+		if(!equali(planter_authid, "BOT")) {
+			g_planted_bomb_slot = FindPlayerSlotByAuthid(planter_authid);
+		}
+	}
+
+	if(g_planted_bomb_slot <= 0 && planter_name[0]) {
+		g_planted_bomb_slot = FindPlayerSlotByName(planter_name);
+		if(g_planted_bomb_slot > 0 && !g_planted_bomb_steam_id[0]) {
+			get_user_authid(g_planted_bomb_slot, g_planted_bomb_steam_id, charsmax(g_planted_bomb_steam_id));
+		}
+	}
+
+	if(g_planted_bomb_slot > 0) {
+		server_print("[ultrahc_discord] planted capture fallback: userid=%d slot=%d authid=%s name=%s", planter_userid, g_planted_bomb_slot, g_planted_bomb_steam_id, planter_name);
+	} else {
+		server_print("[ultrahc_discord] planted capture failed: userid=%d authid=%s name=%s", planter_userid, planter_authid, planter_name);
+	}
+}
+
+stock bool:SetPlantedBombOwner(player_slot) {
+	if(player_slot <= 0 || player_slot > MaxClients) {
+		return false;
+	}
+
+	if(!is_user_connected(player_slot) || is_user_hltv(player_slot)) {
+		return false;
+	}
+
+	g_planted_bomb_slot = player_slot;
+	get_user_authid(player_slot, g_planted_bomb_steam_id, charsmax(g_planted_bomb_steam_id));
+	return true;
+}
+
+stock FindPlayerSlotByAuthid(const authid[]) {
+	if(!authid[0]) return 0;
+
+	new user_authid[64];
+	for(new id = 1; id <= MaxClients; id++) {
+		if(!is_user_connected(id) || is_user_hltv(id)) continue;
+
+		get_user_authid(id, user_authid, charsmax(user_authid));
+		if(equal(user_authid, authid)) {
+			return id;
+		}
+	}
+
+	return 0;
+}
+
+stock FindPlayerSlotByName(const player_name[]) {
+	if(!player_name[0]) return 0;
+
+	new user_name[MAX_NAME_LENGTH];
+	for(new id = 1; id <= MaxClients; id++) {
+		if(!is_user_connected(id) || is_user_hltv(id)) continue;
+
+		get_user_name(id, user_name, charsmax(user_name));
+		if(equal(user_name, player_name)) {
+			return id;
+		}
+	}
+
+	return 0;
 }
 
 stock bool:HasUserWeaponC4(player_id) {

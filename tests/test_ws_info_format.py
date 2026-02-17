@@ -103,3 +103,41 @@ def test_format_info_message_time_fallback():
 
   assert "До конца карты: --:--" in message
   assert "Номер раунда: 0" in message
+
+
+def test_format_info_message_marks_planted_bomb_by_slot():
+  message = format_info_message(
+    map_name="de_nuke",
+    current_players=[
+      {"slot": 1, "name": ">|< Mep3ocTb", "steam_id": "STEAM_0:1:45686725", "stats": [7, 3, 1]},
+      {"slot": 2, "name": "49.5 | Ringo", "steam_id": "BOT", "stats": [5, 4, 1]},
+    ],
+    max_players=32,
+    player_count_override=2,
+    bomb_carrier_steam_id="BOT",
+    bomb_carrier_slot=2,
+    planted_bomb_steam_id="STEAM_0:1:45686725",
+    planted_bomb_slot=1,
+  )
+
+  assert f"{Color.Green}(planted bomb){Color.Default}" in message
+  assert message.count(f"{Color.Green}(planted bomb){Color.Default}") == 1
+  assert message.count(f"{Color.Green}(bomb){Color.Default}") == 1
+
+
+def test_format_info_message_planted_bomb_has_priority_over_bomb():
+  message = format_info_message(
+    map_name="de_inferno",
+    current_players=[
+      {"slot": 10, "name": "49.5 | Quintin", "steam_id": "BOT", "stats": [2, 7, 1]},
+    ],
+    max_players=32,
+    player_count_override=1,
+    bomb_carrier_steam_id="BOT",
+    bomb_carrier_slot=10,
+    planted_bomb_steam_id="BOT",
+    planted_bomb_slot=10,
+  )
+
+  assert f"{Color.Green}(planted bomb){Color.Default}" in message
+  assert f"{Color.Green}(bomb){Color.Default}" not in message
