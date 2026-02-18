@@ -5,6 +5,7 @@ from bot.wow_moments import (
   MomentCluster,
   MomentState,
   format_mmss,
+  format_stars_emoji,
   normalize_map_name_for_match,
   parse_moment_vote_payload,
 )
@@ -267,7 +268,7 @@ def format_moment_message(cluster: MomentCluster) -> str:
   lines = [
     "WOW-момент",
     f"Игрок: **{cluster.target_name}**",
-    f"Звезды: **x{cluster.stars}**",
+    f"Звезды: {format_stars_emoji(cluster.stars)}",
     f"Кто отметил: {format_moment_voters(cluster)}",
     f"K/D: `{cluster.target_frags}/{cluster.target_deaths}`",
     f"Карта: `{map_name}` | Раунд: `{cluster.round_number}`",

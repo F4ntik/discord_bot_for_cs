@@ -37,6 +37,19 @@ def format_mmss(seconds: int) -> str:
   return f"{minutes:02d}:{secs:02d}"
 
 
+def format_stars_emoji(stars: int, *, preview_limit: int = 10) -> str:
+  stars_value = max(0, _safe_int(stars, 0))
+  limit = max(1, _safe_int(preview_limit, 10))
+  if stars_value <= 0:
+    return "—"
+
+  visible = min(stars_value, limit)
+  icons = "⭐" * visible
+  if stars_value > limit:
+    return f"{icons} x{stars_value}"
+  return icons
+
+
 def normalize_map_name_for_match(map_name: str) -> str:
   value = _safe_str(map_name).strip().lower()
   if not value:

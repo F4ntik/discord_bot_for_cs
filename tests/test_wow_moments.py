@@ -12,6 +12,7 @@ from bot.wow_moments import (
   MomentState,
   build_myarena_demo_url,
   extract_map_from_demo_path,
+  format_stars_emoji,
   is_demo_map_compatible,
   normalize_map_name_for_match,
   parse_hltv_recording_path,
@@ -174,3 +175,14 @@ def test_hltv_resolver_reports_mismatch_before_map_switch():
   second = asyncio.run(resolver.resolve_demo("de_dust2_2x2", force_refresh=True))
   assert second.demo_url is not None
   assert second.map_mismatch is False
+
+
+def test_format_stars_emoji_compact():
+  assert format_stars_emoji(1) == "⭐"
+  assert format_stars_emoji(7) == "⭐⭐⭐⭐⭐⭐⭐"
+  assert format_stars_emoji(10) == "⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐"
+
+
+def test_format_stars_emoji_with_cap_and_suffix():
+  assert format_stars_emoji(11) == "⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐ x11"
+  assert format_stars_emoji(25) == "⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐ x25"
