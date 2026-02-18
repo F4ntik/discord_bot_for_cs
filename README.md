@@ -33,7 +33,7 @@
 
 ### Что заполнить для Discord
 - Обязательные: `BOT_TOKEN`, `GUILD_ID`, `CS_CHAT_CHNL_ID`, `INFO_CHANNEL_ID`.
-- Для WOW: `MOMENTS_CHANNEL_ID`.
+- Для WOW: `MOMENTS_CHANNEL_ID` (ID текстового канала или ID ветки форума/Thread).
 - Рекомендуемо хранить чувствительные значения в локальном `.env` (по шаблону `.env.example`), а `config.py` держать как шаблон/дефолт.
 
 ### Переключение веток через updater.sh

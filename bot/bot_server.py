@@ -18,6 +18,8 @@ import time
 
 import config
 
+MomentChannel = discord.TextChannel | discord.Thread
+
 def _load_local_env_file() -> None:
   env_path = Path(__file__).resolve().parents[1] / ".env"
   if not env_path.exists():
@@ -227,7 +229,7 @@ async def send_status_message(message: str, channel: discord.TextChannel):
     cs_status_message = None
 
 # -- get_moments_channel
-async def get_moments_channel() -> discord.TextChannel | None:
+async def get_moments_channel() -> MomentChannel | None:
   channel_id = moments_channel_id
   if channel_id <= 0:
     return None
@@ -240,10 +242,10 @@ async def get_moments_channel() -> discord.TextChannel | None:
       logger.error(f"DBot: MOMENTS_CHANNEL_ID={channel_id} недоступен: {err}")
       return None
 
-  if isinstance(channel, discord.TextChannel):
+  if isinstance(channel, (discord.TextChannel, discord.Thread)):
     return channel
 
-  logger.error(f"DBot: MOMENTS_CHANNEL_ID={channel_id} не является текстовым каналом")
+  logger.error(f"DBot: MOMENTS_CHANNEL_ID={channel_id} не является текстовым каналом/веткой")
   return None
 
 

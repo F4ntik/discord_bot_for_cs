@@ -248,7 +248,7 @@ chmod +x restore.sh
 
 ### Новые параметры `config.py`
 - Все WOW-параметры сейчас помечены в `config.py` как `[EXPERIMENTAL]`, чтобы их было проще найти после `updater.sh`.
-- `MOMENTS_CHANNEL_ID` — ID Discord-канала для WOW-моментов.
+- `MOMENTS_CHANNEL_ID` — ID Discord-канала для WOW-моментов (поддерживается текстовый канал и ветка форума/Thread).
 - `WOW_MOMENT_WINDOW_SEC` — окно агрегации голосов (сек).
 - `WOW_MOMENT_SESSION_IDLE_SEC` — сброс in-memory сессии после простоя.
 - `HLTV_HOST`, `HLTV_PORT`, `HLTV_RCON_PASSWORD`, `HLTV_RCON_TIMEOUT_SEC` — подключение к HLTV RCON.
@@ -292,5 +292,5 @@ chmod +x restore.sh
   2. Держать `.env` только локально (файл уже добавлен в `.gitignore`).
   3. Публиковать в репозиторий только `.env.example` с плейсхолдерами.
 - Обязательные Discord-поля для запуска бота: `BOT_TOKEN`, `GUILD_ID`, `CS_CHAT_CHNL_ID`, `INFO_CHANNEL_ID`.
-- Для WOW-ленты дополнительно задать `MOMENTS_CHANNEL_ID`.
+- Для WOW-ленты дополнительно задать `MOMENTS_CHANNEL_ID` (можно указать ID ветки форума/Thread).
 - Параметры WOW/демок, которые удобно задавать через `.env`: `MYARENA_HID`, `MYARENA_DEMO_BASE_HOST`, `WOW_DEMO_FTP_*`, `WOW_DEMO_PREFER_FTP`, `HLTV_*`.
