@@ -5,6 +5,7 @@ from bot.wow_moments import (
   MomentCluster,
   MomentState,
   format_mmss,
+  normalize_map_name_for_match,
   parse_moment_vote_payload,
 )
 
@@ -115,6 +116,9 @@ demo_resolver = HltvDemoResolver(
   ftp_demo_dir=_cfg_or_env_str("WOW_DEMO_FTP_DIR", "/cstrike"),
   prefer_ftp=_cfg_or_env_bool("WOW_DEMO_PREFER_FTP", True),
 )
+WOW_DEMO_RETRY_WINDOW_SEC = 35
+WOW_DEMO_RETRY_STEP_SEC = 5
+WOW_VOTERS_PREVIEW_LIMIT = 10
 
 # Буфер для накопления сообщений из CS
 cs_message_buffer = deque()
@@ -244,22 +248,62 @@ async def get_moments_channel() -> discord.TextChannel | None:
 
 
 # -- format_moment_message
+def format_moment_voters(cluster: MomentCluster) -> str:
+  voters = [name.strip() for name in cluster.voter_names if name and name.strip()]
+  if not voters:
+    return "—"
+
+  visible = voters[:WOW_VOTERS_PREVIEW_LIMIT]
+  overflow = len(voters) - len(visible)
+  if overflow > 0:
+    return f"{', '.join(visible)}, и еще {overflow}"
+  return ", ".join(visible)
+
+
 def format_moment_message(cluster: MomentCluster) -> str:
+  map_name = normalize_map_name_for_match(cluster.map_name) or cluster.map_name
   lines = [
-    "WOW moment",
-    f"Player: **{cluster.target_name}**",
-    f"Stars: **x{cluster.stars}**",
+    "WOW-момент",
+    f"Игрок: **{cluster.target_name}**",
+    f"Звезды: **x{cluster.stars}**",
+    f"Кто отметил: {format_moment_voters(cluster)}",
     f"K/D: `{cluster.target_frags}/{cluster.target_deaths}`",
-    f"Map: `{cluster.map_name}` | Round: `{cluster.round_number}`",
-    f"Time left: `{format_mmss(cluster.map_timeleft_sec)}`",
+    f"Карта: `{map_name}` | Раунд: `{cluster.round_number}`",
+    f"Таймкод: `~{format_mmss(cluster.map_elapsed_sec)}` от старта карты",
   ]
 
   if cluster.demo_url:
-    lines.append(f"Demo: {cluster.demo_url}")
+    lines.append(f"Демо: {cluster.demo_url}")
   else:
-    lines.append("Demo: unavailable")
+    lines.append("Демо: недоступно")
 
   return "\n".join(lines)
+
+
+async def resolve_moment_demo_url(cluster: MomentCluster) -> None:
+  if cluster.demo_url or not demo_resolver.enabled:
+    return
+
+  result = await demo_resolver.resolve_demo(cluster.map_name)
+  if result.demo_url:
+    cluster.demo_url = result.demo_url
+    return
+
+  if not result.map_mismatch:
+    return
+
+  retries = max(1, WOW_DEMO_RETRY_WINDOW_SEC // WOW_DEMO_RETRY_STEP_SEC)
+  logger.warning(
+    "DBot: WOW demo map mismatch for map=%s, waiting up to %ss",
+    cluster.map_name,
+    WOW_DEMO_RETRY_WINDOW_SEC,
+  )
+  for _ in range(retries):
+    await asyncio.sleep(WOW_DEMO_RETRY_STEP_SEC)
+    retry_result = await demo_resolver.resolve_demo(cluster.map_name, force_refresh=True)
+    if retry_result.demo_url:
+      cluster.demo_url = retry_result.demo_url
+      return
 
 
 # -- upsert_moment_message
@@ -269,8 +313,7 @@ async def upsert_moment_message(cluster: MomentCluster) -> None:
     logger.error("DBot: MOMENTS_CHANNEL_ID не настроен или недоступен")
     return
 
-  if not cluster.demo_url:
-    cluster.demo_url = await demo_resolver.resolve_demo_url(cluster.map_name)
+  await resolve_moment_demo_url(cluster)
 
   content = format_moment_message(cluster)
   cached_message = moment_messages.get(cluster.cluster_id)

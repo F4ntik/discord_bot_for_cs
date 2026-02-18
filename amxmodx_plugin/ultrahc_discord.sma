@@ -491,6 +491,7 @@ SendWowMomentWebhook(voter_id, target_id) {
 	new target_frags = get_user_frags(target_id);
 	new target_deaths = get_user_deaths(target_id);
 	new map_timeleft_sec = get_timeleft();
+	new map_elapsed_sec = floatround(get_gametime());
 	new event_unix = get_systime();
 
 	new json[1024];
@@ -501,6 +502,7 @@ SendWowMomentWebhook(voter_id, target_id) {
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"map^":^"%s^",", map_name)) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"round_number^":%i,", g_round_number)) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"map_timeleft_sec^":%i,", map_timeleft_sec)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"map_elapsed_sec^":%i,", map_elapsed_sec)) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"event_unix^":%i,", event_unix)) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"voter_name^":^"%s^",", voter_name)) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"voter_steam_id^":^"%s^",", voter_steam_id)) return;

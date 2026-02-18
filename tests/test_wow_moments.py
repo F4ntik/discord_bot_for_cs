@@ -1,3 +1,4 @@
+import asyncio
 import pathlib
 import sys
 
@@ -7,8 +8,12 @@ if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
 
 from bot.wow_moments import (
+  HltvDemoResolver,
   MomentState,
   build_myarena_demo_url,
+  extract_map_from_demo_path,
+  is_demo_map_compatible,
+  normalize_map_name_for_match,
   parse_hltv_recording_path,
   parse_moment_vote_payload,
   pick_ftp_demo_filename,
@@ -20,6 +25,7 @@ def _vote_payload(**kwargs):
     "map": "de_dust2",
     "round_number": 4,
     "map_timeleft_sec": 777,
+    "map_elapsed_sec": 83,
     "event_unix": 1_700_000_000,
     "voter_name": "Vasya",
     "voter_steam_id": "STEAM_0:1:1",
@@ -61,7 +67,7 @@ def test_moment_state_aggregates_other_voter_in_window():
   state = MomentState(window_sec=30, session_idle_sec=900)
   vote_a = parse_moment_vote_payload(_vote_payload(voter_steam_id="STEAM_0:1:11", voter_slot=11))
   vote_b = parse_moment_vote_payload(
-    _vote_payload(voter_steam_id="STEAM_0:1:12", voter_slot=12, event_unix=1_700_000_020)
+    _vote_payload(voter_name="Petya", voter_steam_id="STEAM_0:1:12", voter_slot=12, event_unix=1_700_000_020)
   )
   assert vote_a is not None
   assert vote_b is not None
@@ -70,6 +76,7 @@ def test_moment_state_aggregates_other_voter_in_window():
   second = state.process_vote(vote_b)
   assert first.cluster.cluster_id == second.cluster.cluster_id
   assert second.cluster.stars == 2
+  assert second.cluster.voter_names == ["Vasya", "Petya"]
 
 
 def test_moment_state_creates_new_cluster_outside_window():
@@ -106,6 +113,7 @@ def test_pick_ftp_demo_filename_prefers_latest_and_map():
   ]
   assert pick_ftp_demo_filename(candidates, map_name="de_dust2") == "autorec-2602171530-de_dust2.dem"
   assert pick_ftp_demo_filename(candidates, map_name="de_nuke") == "autorec-2602171530-de_dust2.dem"
+  assert pick_ftp_demo_filename(candidates, map_name="de_dust2_2x2") == "autorec-2602171530-de_dust2.dem"
 
 
 def test_pick_ftp_demo_filename_uses_stamp_when_two_plain_demos_overlap():
@@ -114,3 +122,55 @@ def test_pick_ftp_demo_filename_uses_stamp_when_two_plain_demos_overlap():
     ("autorec-2602171527-de_inferno.dem", 100),
   ]
   assert pick_ftp_demo_filename(candidates) == "autorec-2602171527-de_inferno.dem"
+
+
+def test_normalize_map_name_for_match():
+  assert normalize_map_name_for_match("de_dust2_2x2") == "de_dust2"
+  assert normalize_map_name_for_match("de_train_winter") == "de_train_winter"
+
+
+def test_extract_map_from_demo_path():
+  assert extract_map_from_demo_path("cstrike/autorec-2602180736-de_dust2.dem") == "de_dust2"
+  assert extract_map_from_demo_path("cstrike/autorec-2602180736-de_dust2_2x2.dem") == "de_dust2"
+  assert extract_map_from_demo_path("cstrike/de_train_winter.dem") == "de_train_winter"
+
+
+def test_is_demo_map_compatible_with_mode_suffix():
+  demo = "cstrike/autorec-2602180736-de_dust2.dem"
+  assert is_demo_map_compatible("de_dust2_2x2", demo) is True
+  assert is_demo_map_compatible("de_train_winter", demo) is False
+
+
+def test_hltv_resolver_reports_mismatch_before_map_switch():
+  resolver = HltvDemoResolver(
+    host="127.0.0.1",
+    port=27020,
+    password="x",
+    timeout_sec=2,
+    myarena_host="gs13.myarena.pro",
+    myarena_hid="89000",
+  )
+
+  replies = [
+    "https://gs13.myarena.pro/getzipdemo.php?hid=89000&dem=cstrike/autorec-2602180816-de_train_winter.dem",
+    "https://gs13.myarena.pro/getzipdemo.php?hid=89000&dem=cstrike/autorec-2602180816-de_dust2.dem",
+  ]
+
+  async def fake_hltv(_map_name):
+    if replies:
+      return replies.pop(0)
+    return None
+
+  async def fake_ftp(_map_name):
+    return None
+
+  resolver._resolve_via_hltv = fake_hltv  # type: ignore[method-assign]
+  resolver._resolve_via_ftp = fake_ftp  # type: ignore[method-assign]
+
+  first = asyncio.run(resolver.resolve_demo("de_dust2_2x2", force_refresh=True))
+  assert first.demo_url is None
+  assert first.map_mismatch is True
+
+  second = asyncio.run(resolver.resolve_demo("de_dust2_2x2", force_refresh=True))
+  assert second.demo_url is not None
+  assert second.map_mismatch is False

@@ -13,6 +13,8 @@ from rehlds.rcon import RCON
 
 
 _RECORDING_RE = re.compile(r"recording to\s+\"?([^\",\r\n]+?\.dem)\"?", re.IGNORECASE)
+_MAP_SUFFIX_MODE_RE = re.compile(r"_\d+x\d+$", re.IGNORECASE)
+_DEMO_WITH_STAMP_RE = re.compile(r"(?:^|[-_])\d{10}-(.+)$", re.IGNORECASE)
 
 
 def _safe_int(value, default=0) -> int:
@@ -33,6 +35,13 @@ def format_mmss(seconds: int) -> str:
     return "--:--"
   minutes, secs = divmod(seconds, 60)
   return f"{minutes:02d}:{secs:02d}"
+
+
+def normalize_map_name_for_match(map_name: str) -> str:
+  value = _safe_str(map_name).strip().lower()
+  if not value:
+    return ""
+  return _MAP_SUFFIX_MODE_RE.sub("", value)
 
 
 def parse_hltv_recording_path(status_text: str) -> Optional[str]:
@@ -84,17 +93,53 @@ def _extract_demo_stamp_unix(name: str) -> int:
     return 0
 
 
+def extract_map_from_demo_path(demo_path: str) -> str:
+  raw_path = _safe_str(demo_path).strip().replace("\\", "/")
+  if not raw_path:
+    return ""
+
+  filename = raw_path.rsplit("/", 1)[-1]
+  lowered = filename.lower()
+  if lowered.endswith(".dem.zip"):
+    filename = filename[:-8]
+  elif lowered.endswith(".dem"):
+    filename = filename[:-4]
+  else:
+    return ""
+
+  match = _DEMO_WITH_STAMP_RE.search(filename)
+  if match:
+    return normalize_map_name_for_match(match.group(1))
+
+  if "-" in filename:
+    return normalize_map_name_for_match(filename.rsplit("-", 1)[-1])
+
+  return normalize_map_name_for_match(filename)
+
+
+def is_demo_map_compatible(moment_map_name: str, demo_path: str) -> bool:
+  moment_map = normalize_map_name_for_match(moment_map_name)
+  if not moment_map:
+    return True
+
+  demo_map = extract_map_from_demo_path(demo_path)
+  if not demo_map:
+    return True
+
+  return demo_map == moment_map
+
+
 def pick_ftp_demo_filename(candidates: list[tuple[str, int]], map_name: str = "") -> Optional[str]:
   if not candidates:
     return None
 
-  map_name = _safe_str(map_name).strip().lower()
+  map_name = normalize_map_name_for_match(map_name)
   filtered = [(name, ts) for name, ts in candidates if name]
   if not filtered:
     return None
 
   if map_name:
-    map_matches = [(name, ts) for name, ts in filtered if map_name in name.lower()]
+    map_matches = [(name, ts) for name, ts in filtered if is_demo_map_compatible(map_name, name)]
     if map_matches:
       filtered = map_matches
 
@@ -127,6 +172,7 @@ class MomentVote:
   map_name: str
   round_number: int
   map_timeleft_sec: int
+  map_elapsed_sec: int
   event_unix: int
   voter_name: str
   voter_steam_id: str
@@ -171,6 +217,7 @@ def parse_moment_vote_payload(data: dict) -> Optional[MomentVote]:
     map_name=map_name,
     round_number=max(0, _safe_int(data.get("round_number"), 0)),
     map_timeleft_sec=max(-1, _safe_int(data.get("map_timeleft_sec"), -1)),
+    map_elapsed_sec=max(-1, _safe_int(data.get("map_elapsed_sec"), -1)),
     event_unix=event_unix,
     voter_name=voter_name,
     voter_steam_id=_safe_str(data.get("voter_steam_id")).strip(),
@@ -199,9 +246,11 @@ class MomentCluster:
   last_event_unix: int
   center_event_unix: int
   map_timeleft_sec: int
+  map_elapsed_sec: int
   round_number: int
   stars: int = 1
   voters: Set[str] = field(default_factory=set)
+  voter_names: list[str] = field(default_factory=list)
   discord_message_id: Optional[int] = None
   demo_url: Optional[str] = None
 
@@ -218,6 +267,7 @@ class MomentCluster:
     self.target_frags = vote.target_frags
     self.target_deaths = vote.target_deaths
     self.map_timeleft_sec = vote.map_timeleft_sec
+    self.map_elapsed_sec = vote.map_elapsed_sec
     self.round_number = vote.round_number
 
 
@@ -329,6 +379,9 @@ class MomentState:
 
       if voter_key:
         cluster.voters.add(voter_key)
+      voter_name = vote.voter_name.strip()
+      if voter_name:
+        cluster.voter_names.append(voter_name)
       cluster.apply_vote(vote)
       return MomentProcessResult(cluster=cluster, created=False, duplicate_vote=False, session_reset=session_reset)
 
@@ -346,14 +399,25 @@ class MomentState:
       last_event_unix=vote.event_unix,
       center_event_unix=vote.event_unix,
       map_timeleft_sec=vote.map_timeleft_sec,
+      map_elapsed_sec=vote.map_elapsed_sec,
       round_number=vote.round_number,
     )
     if voter_key:
       cluster.voters.add(voter_key)
+    voter_name = vote.voter_name.strip()
+    if voter_name:
+      cluster.voter_names.append(voter_name)
 
     self._next_cluster_id += 1
     self._clusters.append(cluster)
     return MomentProcessResult(cluster=cluster, created=True, duplicate_vote=False, session_reset=session_reset)
+
+
+@dataclass
+class DemoResolveResult:
+  demo_url: Optional[str] = None
+  demo_path: Optional[str] = None
+  map_mismatch: bool = False
 
 
 class HltvDemoResolver:
@@ -502,16 +566,16 @@ class HltvDemoResolver:
 
     return demo_url
 
-  async def resolve_demo_url(self, map_name: str = "") -> Optional[str]:
+  async def resolve_demo(self, map_name: str = "", *, force_refresh: bool = False) -> DemoResolveResult:
     if not self.enabled:
-      return None
+      return DemoResolveResult()
 
     now = time.monotonic()
-    map_name = _safe_str(map_name).strip().lower()
+    map_name = normalize_map_name_for_match(map_name)
 
-    if self._cache_url and (now - self._cache_at) <= self.cache_ttl_sec:
-      if not map_name or (self._cache_path and map_name in self._cache_path.lower()):
-        return self._cache_url
+    if not force_refresh and self._cache_url and (now - self._cache_at) <= self.cache_ttl_sec:
+      if not map_name or is_demo_map_compatible(map_name, _safe_str(self._cache_path)):
+        return DemoResolveResult(demo_url=self._cache_url, demo_path=self._cache_path)
 
     ordered_resolvers = (
       (self._resolve_via_ftp, self._resolve_via_hltv)
@@ -519,18 +583,27 @@ class HltvDemoResolver:
       else (self._resolve_via_hltv, self._resolve_via_ftp)
     )
 
-    demo_url = None
+    mismatch_detected = False
     for resolver in ordered_resolvers:
       demo_url = await resolver(map_name)
-      if demo_url:
-        break
+      if not demo_url:
+        continue
 
-    if not demo_url:
-      return None
+      demo_path = unquote(demo_url.split("&dem=", 1)[-1])
+      if map_name and demo_path and not is_demo_map_compatible(map_name, demo_path):
+        mismatch_detected = True
+        continue
 
-    demo_path = unquote(demo_url.split("&dem=", 1)[-1])
+      self._cache_path = demo_path
+      self._cache_url = demo_url
+      self._cache_at = now
+      return DemoResolveResult(demo_url=demo_url, demo_path=demo_path)
 
-    self._cache_path = demo_path
-    self._cache_url = demo_url
-    self._cache_at = now
-    return demo_url
+    if mismatch_detected:
+      return DemoResolveResult(map_mismatch=True)
+
+    return DemoResolveResult()
+
+  async def resolve_demo_url(self, map_name: str = "", *, force_refresh: bool = False) -> Optional[str]:
+    result = await self.resolve_demo(map_name, force_refresh=force_refresh)
+    return result.demo_url
