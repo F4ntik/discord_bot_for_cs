@@ -1,6 +1,31 @@
 ﻿# Журнал проекта
 
+## 2026-02-18
+- Исправлена кодировка `README.md` и комментариев в `config.py` (возврат к корректному UTF-8, без повреждённых символов).
+- Экспериментальные WOW-параметры в `config.py` помечены тегом `[EXPERIMENTAL]` для безопасного заполнения при тестах и переключениях веток.
+- В `bot/bot_server.py` исправлено чтение `MOMENTS_CHANNEL_ID`: теперь канал WOW корректно берётся через общий `config -> ENV` fallback.
+- Обновлены `README.md`, `docs/PROJECT_DOC_RU.md` и `.env.example`: добавлены инструкции по настройке Discord, работе с WOW-параметрами и циклу `updater.sh --branch feature/wow-moments` <-> `--branch main`.
+- Пересобран AMXX-плагин `amxmodx_plugin/ultrahc_discord.amxx` из актуального `ultrahc_discord.sma`.
+- Прогнаны тесты `python -m pytest -q tests/test_wow_moments.py tests/test_webhook_type.py` (37 passed).
+
 ## 2026-02-17
+- Исправлен кейс FTP fallback с двумя незакрытыми `.dem`: выбор текущей демки переведён на приоритет таймстампа из имени (`DDMMYYHHMM`) с fallback на `MDTM`, чтобы после смены карты не подхватывалась старая запись.
+- Добавлен тест `test_pick_ftp_demo_filename_uses_stamp_when_two_plain_demos_overlap`.
+- Добавлена безопасная схема локальных секретов через `.env`: файл `.env` и маски `.env.*` исключены из git (`.gitignore`), в репозиторий добавлен шаблон `.env.example`.
+- В `bot/bot_server.py` закреплена загрузка `.env` при старте и fallback `config.py -> ENV` для WOW/HLTV/FTP параметров и `BOT_TOKEN`.
+- Локально заполнен `.env` тестовыми параметрами MyArena/FTP для быстрой проверки WOW demo URL без хранения чувствительных данных в репозитории.
+- Реализован функционал WOW-моментов (Discord-канал событий): добавлен новый webhook тип `moment_vote` (`type_code=3`) в связке AMXX -> бот -> Discord.
+- В AMXX-плагине `ultrahc_discord.sma` добавлен игровой триггер `omg|/omg|!omg` с меню людей онлайн и отправкой `moment_vote` через `easy_http`.
+- Добавлены anti-spam/cooldown в AMXX для OMG-голосов (`WOW_MOMENT_VOTE_COOLDOWN_SEC`), чтобы снизить флад меню/вебхука.
+- В боте добавлен in-memory агрегатор WOW-моментов (окно `WOW_MOMENT_WINDOW_SEC`): 1 голос от игрока на агрегированный момент, 1 Discord-пост на момент с последующим edit при росте stars.
+- Добавлен resolver demo URL через HLTV RCON `status` (парсинг `Recording to ...`) и сборка публичной MyArena-ссылки `getzipdemo.php`.
+- Добавлен FTP fallback для определения текущей демки (`WOW_DEMO_FTP_*`): бот читает `WOW_DEMO_FTP_DIR`, игнорирует архивы `.dem.zip` и берет незакрытую `.dem` для генерации ссылки.
+- При недоступности HLTV/RCON момент публикуется без demo-ссылки (graceful fallback, без потери событий).
+- Добавлен новый модуль `bot/wow_moments.py` и тесты `tests/test_wow_moments.py`.
+- Добавлены новые параметры в `config.py`: `MOMENTS_CHANNEL_ID`, `WOW_MOMENT_WINDOW_SEC`, `WOW_MOMENT_SESSION_IDLE_SEC`, `HLTV_*`, `MYARENA_*`.
+- Обновлены документы `docs/PROJECT_DOC_RU.md` и `README.md` под WOW-моменты.
+- Пересобран AMXX-плагин `amxmodx_plugin/ultrahc_discord.amxx` (успешная компиляция).
+- Версии повышены для новой линии совместимости: бот `0.5.0`, AMXX-плагин `0.5.0` (`B=5`).
 - Собран build `0.3-dbg-20260217-13`: для снижения риска порчи памяти в `SendInfoWebhook` большие буферы (`json/player_json/user_name/user_auth`) вынесены в глобальные, добавлен запас `#pragma dynamic 32768`.
 - Собран build `0.3-dbg-20260217-12`: для статуса снова включена отправка `current_players` (`INFO_INCLUDE_PLAYERS 1`), чтобы в Discord отображались ники и группировка по командам.
 - Собран build `0.3-dbg-20260217-11`: добавлена команда `ultrahc_ds_dbg_players` для диагностики реального состава слотов (human/bot/hltv) и сверки с `player_count` в `info`.

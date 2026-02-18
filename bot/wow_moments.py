@@ -1,0 +1,536 @@
+from __future__ import annotations
+
+import asyncio
+import calendar
+from ftplib import FTP
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Optional, Set
+from urllib.parse import quote, unquote
+
+from rehlds.rcon import RCON
+
+
+_RECORDING_RE = re.compile(r"recording to\s+\"?([^\",\r\n]+?\.dem)\"?", re.IGNORECASE)
+
+
+def _safe_int(value, default=0) -> int:
+  try:
+    return int(value)
+  except (TypeError, ValueError):
+    return default
+
+
+def _safe_str(value, default="") -> str:
+  if value is None:
+    return default
+  return str(value)
+
+
+def format_mmss(seconds: int) -> str:
+  if not isinstance(seconds, int) or seconds < 0:
+    return "--:--"
+  minutes, secs = divmod(seconds, 60)
+  return f"{minutes:02d}:{secs:02d}"
+
+
+def parse_hltv_recording_path(status_text: str) -> Optional[str]:
+  if not status_text:
+    return None
+
+  match = _RECORDING_RE.search(status_text)
+  if not match:
+    return None
+
+  demo_path = match.group(1).strip()
+  if not demo_path:
+    return None
+
+  return demo_path.replace("\\", "/")
+
+
+def _is_plain_demo_file(name: str) -> bool:
+  lowered = name.lower()
+  return lowered.endswith(".dem") and not lowered.endswith(".dem.zip")
+
+
+def _extract_ftp_name(raw_name: str) -> str:
+  value = _safe_str(raw_name).strip().replace("\\", "/")
+  if not value:
+    return ""
+  if "/" in value:
+    return value.rsplit("/", 1)[-1]
+  return value
+
+
+def _extract_demo_stamp_unix(name: str) -> int:
+  if not name:
+    return 0
+
+  match = re.search(r"(?:^|[-_])(\d{10})(?:[-_]|$)", name)
+  if not match:
+    return 0
+
+  stamp = match.group(1)
+  try:
+    day = int(stamp[0:2])
+    month = int(stamp[2:4])
+    year = 2000 + int(stamp[4:6])
+    hour = int(stamp[6:8])
+    minute = int(stamp[8:10])
+    return int(calendar.timegm((year, month, day, hour, minute, 0)))
+  except (TypeError, ValueError):
+    return 0
+
+
+def pick_ftp_demo_filename(candidates: list[tuple[str, int]], map_name: str = "") -> Optional[str]:
+  if not candidates:
+    return None
+
+  map_name = _safe_str(map_name).strip().lower()
+  filtered = [(name, ts) for name, ts in candidates if name]
+  if not filtered:
+    return None
+
+  if map_name:
+    map_matches = [(name, ts) for name, ts in filtered if map_name in name.lower()]
+    if map_matches:
+      filtered = map_matches
+
+  filtered.sort(
+    key=lambda item: (_extract_demo_stamp_unix(item[0]), item[1], item[0]),
+    reverse=True,
+  )
+  return filtered[0][0]
+
+
+def build_myarena_demo_url(base_host: str, hid: str, demo_path: str) -> Optional[str]:
+  base_host = _safe_str(base_host).strip()
+  hid = _safe_str(hid).strip()
+  demo_path = _safe_str(demo_path).strip()
+
+  if not base_host or not hid or not demo_path:
+    return None
+
+  if base_host.startswith("http://"):
+    base_host = base_host[len("http://"):]
+  elif base_host.startswith("https://"):
+    base_host = base_host[len("https://"):]
+
+  encoded_demo_path = quote(demo_path, safe="/._-")
+  return f"https://{base_host}/getzipdemo.php?hid={hid}&dem={encoded_demo_path}"
+
+
+@dataclass
+class MomentVote:
+  map_name: str
+  round_number: int
+  map_timeleft_sec: int
+  event_unix: int
+  voter_name: str
+  voter_steam_id: str
+  voter_slot: int
+  target_name: str
+  target_steam_id: str
+  target_slot: int
+  target_team: int
+  target_frags: int
+  target_deaths: int
+
+  @property
+  def target_key(self) -> str:
+    steam_id = self.target_steam_id.strip()
+    if steam_id and steam_id.upper() != "BOT":
+      return f"steam:{steam_id}"
+    return f"slot:{self.target_slot}"
+
+  @property
+  def voter_key(self) -> str:
+    steam_id = self.voter_steam_id.strip()
+    if steam_id and steam_id.upper() != "BOT":
+      return f"steam:{steam_id}"
+    return f"slot:{self.voter_slot}"
+
+
+def parse_moment_vote_payload(data: dict) -> Optional[MomentVote]:
+  if not isinstance(data, dict):
+    return None
+
+  map_name = _safe_str(data.get("map")).strip()
+  voter_name = _safe_str(data.get("voter_name")).strip()
+  target_name = _safe_str(data.get("target_name")).strip()
+  if not map_name or not voter_name or not target_name:
+    return None
+
+  event_unix = _safe_int(data.get("event_unix"), int(time.time()))
+  if event_unix <= 0:
+    event_unix = int(time.time())
+
+  return MomentVote(
+    map_name=map_name,
+    round_number=max(0, _safe_int(data.get("round_number"), 0)),
+    map_timeleft_sec=max(-1, _safe_int(data.get("map_timeleft_sec"), -1)),
+    event_unix=event_unix,
+    voter_name=voter_name,
+    voter_steam_id=_safe_str(data.get("voter_steam_id")).strip(),
+    voter_slot=max(0, _safe_int(data.get("voter_slot"), 0)),
+    target_name=target_name,
+    target_steam_id=_safe_str(data.get("target_steam_id")).strip(),
+    target_slot=max(0, _safe_int(data.get("target_slot"), 0)),
+    target_team=max(0, _safe_int(data.get("target_team"), 0)),
+    target_frags=_safe_int(data.get("target_frags"), 0),
+    target_deaths=_safe_int(data.get("target_deaths"), 0),
+  )
+
+
+@dataclass
+class MomentCluster:
+  cluster_id: int
+  map_name: str
+  target_key: str
+  target_name: str
+  target_steam_id: str
+  target_slot: int
+  target_team: int
+  target_frags: int
+  target_deaths: int
+  first_event_unix: int
+  last_event_unix: int
+  center_event_unix: int
+  map_timeleft_sec: int
+  round_number: int
+  stars: int = 1
+  voters: Set[str] = field(default_factory=set)
+  discord_message_id: Optional[int] = None
+  demo_url: Optional[str] = None
+
+  def apply_vote(self, vote: MomentVote) -> None:
+    self.stars += 1
+    self.last_event_unix = vote.event_unix
+    self.center_event_unix = int(
+      round(((self.center_event_unix * (self.stars - 1)) + vote.event_unix) / self.stars)
+    )
+    self.target_name = vote.target_name
+    self.target_steam_id = vote.target_steam_id
+    self.target_slot = vote.target_slot
+    self.target_team = vote.target_team
+    self.target_frags = vote.target_frags
+    self.target_deaths = vote.target_deaths
+    self.map_timeleft_sec = vote.map_timeleft_sec
+    self.round_number = vote.round_number
+
+
+@dataclass
+class MomentProcessResult:
+  cluster: MomentCluster
+  created: bool
+  duplicate_vote: bool
+  session_reset: bool
+
+
+class MomentState:
+  def __init__(self, *, window_sec: int = 30, session_idle_sec: int = 900):
+    self.window_sec = max(1, int(window_sec))
+    self.session_idle_sec = max(60, int(session_idle_sec))
+    self._map_name = ""
+    self._last_round_number = 0
+    self._last_event_unix = 0
+    self._clusters: list[MomentCluster] = []
+    self._next_cluster_id = 1
+
+  def reset(self) -> None:
+    self._map_name = ""
+    self._last_round_number = 0
+    self._last_event_unix = 0
+    self._clusters = []
+    self._next_cluster_id = 1
+
+  def touch_info(self, map_name: str, round_number: int, event_unix: Optional[int] = None) -> bool:
+    now = int(event_unix or time.time())
+    map_name = _safe_str(map_name).strip()
+    round_number = max(0, _safe_int(round_number, 0))
+    if not map_name:
+      return False
+
+    should_reset = False
+    if self._map_name and map_name != self._map_name:
+      should_reset = True
+    elif (
+      self._map_name == map_name
+      and self._last_round_number >= 3
+      and round_number > 0
+      and round_number + 2 < self._last_round_number
+    ):
+      should_reset = True
+
+    if should_reset:
+      self.reset()
+
+    self._map_name = map_name
+    self._last_round_number = round_number
+    self._last_event_unix = now
+    return should_reset
+
+  def _should_reset_for_vote(self, vote: MomentVote) -> bool:
+    if not self._map_name:
+      return False
+
+    if vote.map_name != self._map_name:
+      return True
+
+    if self._last_event_unix and (vote.event_unix - self._last_event_unix) > self.session_idle_sec:
+      return True
+
+    if (
+      self._last_round_number >= 3
+      and vote.round_number > 0
+      and vote.round_number + 2 < self._last_round_number
+    ):
+      return True
+
+    return False
+
+  def _find_cluster(self, vote: MomentVote) -> Optional[MomentCluster]:
+    best_cluster = None
+    best_distance = None
+
+    for cluster in self._clusters:
+      if cluster.map_name != vote.map_name:
+        continue
+      if cluster.target_key != vote.target_key:
+        continue
+
+      distance = abs(cluster.center_event_unix - vote.event_unix)
+      if distance > self.window_sec:
+        continue
+
+      if best_cluster is None or distance < best_distance:
+        best_cluster = cluster
+        best_distance = distance
+
+    return best_cluster
+
+  def process_vote(self, vote: MomentVote) -> MomentProcessResult:
+    session_reset = False
+    if self._should_reset_for_vote(vote):
+      self.reset()
+      session_reset = True
+
+    self._map_name = vote.map_name
+    self._last_round_number = vote.round_number
+    self._last_event_unix = vote.event_unix
+
+    cluster = self._find_cluster(vote)
+    voter_key = vote.voter_key
+    if cluster is not None:
+      if voter_key and voter_key in cluster.voters:
+        return MomentProcessResult(cluster=cluster, created=False, duplicate_vote=True, session_reset=session_reset)
+
+      if voter_key:
+        cluster.voters.add(voter_key)
+      cluster.apply_vote(vote)
+      return MomentProcessResult(cluster=cluster, created=False, duplicate_vote=False, session_reset=session_reset)
+
+    cluster = MomentCluster(
+      cluster_id=self._next_cluster_id,
+      map_name=vote.map_name,
+      target_key=vote.target_key,
+      target_name=vote.target_name,
+      target_steam_id=vote.target_steam_id,
+      target_slot=vote.target_slot,
+      target_team=vote.target_team,
+      target_frags=vote.target_frags,
+      target_deaths=vote.target_deaths,
+      first_event_unix=vote.event_unix,
+      last_event_unix=vote.event_unix,
+      center_event_unix=vote.event_unix,
+      map_timeleft_sec=vote.map_timeleft_sec,
+      round_number=vote.round_number,
+    )
+    if voter_key:
+      cluster.voters.add(voter_key)
+
+    self._next_cluster_id += 1
+    self._clusters.append(cluster)
+    return MomentProcessResult(cluster=cluster, created=True, duplicate_vote=False, session_reset=session_reset)
+
+
+class HltvDemoResolver:
+  def __init__(
+    self,
+    *,
+    host: str,
+    port: int,
+    password: str,
+    timeout_sec: int,
+    myarena_host: str,
+    myarena_hid: str,
+    ftp_host: str = "",
+    ftp_port: int = 21,
+    ftp_user: str = "",
+    ftp_password: str = "",
+    ftp_demo_dir: str = "/cstrike",
+    prefer_ftp: bool = False,
+    cache_ttl_sec: int = 20,
+  ):
+    self.host = _safe_str(host).strip()
+    self.port = max(1, _safe_int(port, 27020))
+    self.password = _safe_str(password)
+    self.timeout_sec = max(1, _safe_int(timeout_sec, 6))
+    self.myarena_host = _safe_str(myarena_host).strip()
+    self.myarena_hid = _safe_str(myarena_hid).strip()
+    self.ftp_host = _safe_str(ftp_host).strip()
+    self.ftp_port = max(1, _safe_int(ftp_port, 21))
+    self.ftp_user = _safe_str(ftp_user).strip()
+    self.ftp_password = _safe_str(ftp_password)
+    self.ftp_demo_dir = _safe_str(ftp_demo_dir, "/cstrike").strip() or "/cstrike"
+    self.prefer_ftp = bool(prefer_ftp)
+    self.cache_ttl_sec = max(3, _safe_int(cache_ttl_sec, 20))
+
+    self._cache_url: Optional[str] = None
+    self._cache_path: Optional[str] = None
+    self._cache_at: float = 0.0
+
+  @property
+  def enabled(self) -> bool:
+    return bool(self.myarena_host and self.myarena_hid and (self.hltv_enabled or self.ftp_enabled))
+
+  @property
+  def hltv_enabled(self) -> bool:
+    return bool(self.host and self.password)
+
+  @property
+  def ftp_enabled(self) -> bool:
+    return bool(self.ftp_host and self.ftp_user and self.ftp_password)
+
+  def _fetch_status_sync(self) -> str:
+    rcon = RCON(host=self.host, port=self.port, password=self.password)
+    rcon.connect(timeout=self.timeout_sec, validate_password=True)
+    try:
+      return rcon.execute("status")
+    finally:
+      rcon.disconnect()
+
+  def _mdtm_to_unix(self, mdtm_response: str) -> int:
+    match = re.search(r"(\d{14})$", _safe_str(mdtm_response))
+    if not match:
+      return 0
+
+    stamp = match.group(1)
+    try:
+      year = int(stamp[0:4])
+      month = int(stamp[4:6])
+      day = int(stamp[6:8])
+      hour = int(stamp[8:10])
+      minute = int(stamp[10:12])
+      second = int(stamp[12:14])
+      return int(calendar.timegm((year, month, day, hour, minute, second)))
+    except (TypeError, ValueError):
+      return 0
+
+  def _build_demo_path_from_ftp(self, filename: str) -> str:
+    filename = _extract_ftp_name(filename)
+    prefix = self.ftp_demo_dir.strip().strip("/").replace("\\", "/")
+    if prefix:
+      return f"{prefix}/{filename}"
+    return filename
+
+  def _fetch_ftp_demo_path_sync(self, map_name: str = "") -> Optional[str]:
+    ftp = FTP()
+    ftp.connect(self.ftp_host, self.ftp_port, timeout=self.timeout_sec)
+    ftp.login(self.ftp_user, self.ftp_password)
+    try:
+      ftp.cwd(self.ftp_demo_dir)
+      names = ftp.nlst()
+      candidates: list[tuple[str, int]] = []
+      for raw_name in names:
+        name = _extract_ftp_name(raw_name)
+        if not _is_plain_demo_file(name):
+          continue
+        modified_at = 0
+        try:
+          modified_at = self._mdtm_to_unix(ftp.sendcmd(f"MDTM {name}"))
+        except Exception:
+          modified_at = 0
+        candidates.append((name, modified_at))
+
+      chosen = pick_ftp_demo_filename(candidates, map_name=map_name)
+      if not chosen:
+        return None
+      return self._build_demo_path_from_ftp(chosen)
+    finally:
+      try:
+        ftp.quit()
+      except Exception:
+        ftp.close()
+
+  async def _resolve_via_hltv(self, map_name: str) -> Optional[str]:
+    if not self.hltv_enabled:
+      return None
+
+    try:
+      status_text = await asyncio.to_thread(self._fetch_status_sync)
+    except Exception:
+      return None
+
+    demo_path = parse_hltv_recording_path(status_text)
+    if not demo_path:
+      return None
+
+    demo_url = build_myarena_demo_url(self.myarena_host, self.myarena_hid, demo_path)
+    if not demo_url:
+      return None
+
+    return demo_url
+
+  async def _resolve_via_ftp(self, map_name: str) -> Optional[str]:
+    if not self.ftp_enabled:
+      return None
+
+    try:
+      demo_path = await asyncio.to_thread(self._fetch_ftp_demo_path_sync, map_name)
+    except Exception:
+      return None
+
+    if not demo_path:
+      return None
+
+    demo_url = build_myarena_demo_url(self.myarena_host, self.myarena_hid, demo_path)
+    if not demo_url:
+      return None
+
+    return demo_url
+
+  async def resolve_demo_url(self, map_name: str = "") -> Optional[str]:
+    if not self.enabled:
+      return None
+
+    now = time.monotonic()
+    map_name = _safe_str(map_name).strip().lower()
+
+    if self._cache_url and (now - self._cache_at) <= self.cache_ttl_sec:
+      if not map_name or (self._cache_path and map_name in self._cache_path.lower()):
+        return self._cache_url
+
+    ordered_resolvers = (
+      (self._resolve_via_ftp, self._resolve_via_hltv)
+      if self.prefer_ftp
+      else (self._resolve_via_hltv, self._resolve_via_ftp)
+    )
+
+    demo_url = None
+    for resolver in ordered_resolvers:
+      demo_url = await resolver(map_name)
+      if demo_url:
+        break
+
+    if not demo_url:
+      return None
+
+    demo_path = unquote(demo_url.split("&dem=", 1)[-1])
+
+    self._cache_path = demo_path
+    self._cache_url = demo_url
+    self._cache_at = now
+    return demo_url

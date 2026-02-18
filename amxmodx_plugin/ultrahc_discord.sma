@@ -10,7 +10,7 @@
 #pragma dynamic 32768
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.4.20"
+#define PLUGIN_VERSION 	"0.5.0"
 #define PLUGIN_AUTHOR 	"Asura, Mep3ocTb"
 
 //-----------------------------------------
@@ -28,6 +28,7 @@
 #define DS_SEND_MESSAGE_LENGTH 192
 #define WEBHOOK_TYPE_CODE_INFO 1
 #define WEBHOOK_TYPE_CODE_MESSAGE 2
+#define WEBHOOK_TYPE_CODE_MOMENT 3
 #define INFO_WEBHOOK_ENABLED 1
 #define INFO_JSON_LENGTH 4096
 #define INFO_PUSH_DEBOUNCE_SEC 1.0
@@ -39,6 +40,9 @@
 #define TASK_INFO_HEARTBEAT 60002
 #define MAP_QUERY_MODE_LENGTH 32
 #define MAP_ENTRY_LENGTH 128
+#define WOW_MOMENT_ENABLED 1
+#define WOW_MOMENT_VOTE_COOLDOWN_SEC 3.0
+#define WOW_MOMENT_MENU_TITLE "Who made WOW moment?"
 
 #define MAPS_OUTPUT_BEGIN "ULTRAHC_MAPS_BEGIN"
 #define MAPS_OUTPUT_END "ULTRAHC_MAPS_END"
@@ -86,6 +90,7 @@ new g_score_t = 0;
 new g_score_ct = 0;
 new g_planted_bomb_slot = 0;
 new g_planted_bomb_steam_id[64];
+new Float:g_wow_last_vote_time[33];
 
 // new big_string[5000];
 
@@ -249,6 +254,13 @@ public SayMessageHandler(owner_id) {
 	read_args(con_cmd_text, charsmax(con_cmd_text));
 	remove_quotes(con_cmd_text);
 	trim(con_cmd_text);
+
+	#if WOW_MOMENT_ENABLED
+		if(IsWowTrigger(con_cmd_text)) {
+			HandleWowMomentCommand(owner_id);
+			return PLUGIN_HANDLED;
+		}
+	#endif
 	
 	if(con_cmd_text[0] == '/') {
 		
@@ -361,6 +373,148 @@ public MessageModeCallback(owner_id) {
 	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPCompleteChat", options_id)
 	
 	return PLUGIN_HANDLED;
+}
+
+stock bool:IsWowTrigger(const text[]) {
+	if(!text[0]) return false;
+
+	return (
+		equali(text, "omg")
+		|| equali(text, "/omg")
+		|| equali(text, "!omg")
+	);
+}
+
+HandleWowMomentCommand(voter_id) {
+	if(!is_user_connected(voter_id) || is_user_bot(voter_id) || is_user_hltv(voter_id)) {
+		return;
+	}
+
+	new Float:now = get_gametime();
+	if(now - g_wow_last_vote_time[voter_id] < WOW_MOMENT_VOTE_COOLDOWN_SEC) {
+		client_print(voter_id, print_chat, "[Discord] WOW cooldown active");
+		return;
+	}
+	g_wow_last_vote_time[voter_id] = now;
+
+	new menu = menu_create(WOW_MOMENT_MENU_TITLE, "WowMomentMenuHandler");
+	if(!menu) {
+		return;
+	}
+
+	new players[32], pnum;
+	get_players(players, pnum, "ch");
+
+	new added = 0;
+	new player_name[MAX_NAME_LENGTH];
+	new player_id_str[8];
+	for(new i = 0; i < pnum; i++) {
+		new target_id = players[i];
+		if(!is_user_connected(target_id) || is_user_bot(target_id) || is_user_hltv(target_id)) {
+			continue;
+		}
+
+		get_user_name(target_id, player_name, charsmax(player_name));
+		num_to_str(target_id, player_id_str, charsmax(player_id_str));
+		menu_additem(menu, player_name, player_id_str);
+		added++;
+	}
+
+	if(!added) {
+		menu_destroy(menu);
+		client_print(voter_id, print_chat, "[Discord] WOW target list is empty");
+		return;
+	}
+
+	menu_setprop(menu, MPROP_EXIT, MEXIT_ALL);
+	menu_display(voter_id, menu, 0);
+}
+
+public WowMomentMenuHandler(voter_id, menu, item) {
+	if(item == MENU_EXIT) {
+		menu_destroy(menu);
+		return PLUGIN_HANDLED;
+	}
+
+	new info[8];
+	new player_name[MAX_NAME_LENGTH];
+	new access, callback;
+	menu_item_getinfo(menu, item, access, info, charsmax(info), player_name, charsmax(player_name), callback);
+
+	new target_id = str_to_num(info);
+	if(!is_user_connected(target_id) || is_user_bot(target_id) || is_user_hltv(target_id)) {
+		client_print(voter_id, print_chat, "[Discord] WOW target is no longer online");
+		menu_destroy(menu);
+		return PLUGIN_HANDLED;
+	}
+
+	SendWowMomentWebhook(voter_id, target_id);
+	client_print(voter_id, print_chat, "[Discord] WOW vote sent for %s", player_name);
+
+	menu_destroy(menu);
+	return PLUGIN_HANDLED;
+}
+
+SendWowMomentWebhook(voter_id, target_id) {
+	new EzHttpOptions:options_id = ezhttp_create_options();
+	if(!options_id) {
+		server_print("[ultrahc_discord] wow webhook build failed: options alloc");
+		return;
+	}
+
+	ezhttp_option_set_header(options_id, "Authorization", __cvar_str_list[_webhook_token]);
+	ezhttp_option_set_header(options_id, "Content-Type", "application/json");
+
+	new voter_name[MAX_NAME_LENGTH];
+	new voter_steam_id[64];
+	new target_name[MAX_NAME_LENGTH];
+	new target_steam_id[64];
+	new map_name[32];
+	get_user_name(voter_id, voter_name, charsmax(voter_name));
+	get_user_authid(voter_id, voter_steam_id, charsmax(voter_steam_id));
+	get_user_name(target_id, target_name, charsmax(target_name));
+	get_user_authid(target_id, target_steam_id, charsmax(target_steam_id));
+	get_mapname(map_name, charsmax(map_name));
+
+	replace_all(voter_name, charsmax(voter_name), "\\", "\\\\");
+	replace_all(voter_name, charsmax(voter_name), "^"", "'");
+	replace_all(voter_steam_id, charsmax(voter_steam_id), "\\", "\\\\");
+	replace_all(voter_steam_id, charsmax(voter_steam_id), "^"", "'");
+	replace_all(target_name, charsmax(target_name), "\\", "\\\\");
+	replace_all(target_name, charsmax(target_name), "^"", "'");
+	replace_all(target_steam_id, charsmax(target_steam_id), "\\", "\\\\");
+	replace_all(target_steam_id, charsmax(target_steam_id), "^"", "'");
+	replace_all(map_name, charsmax(map_name), "\\", "\\\\");
+	replace_all(map_name, charsmax(map_name), "^"", "'");
+
+	new target_team = get_user_team(target_id);
+	new target_frags = get_user_frags(target_id);
+	new target_deaths = get_user_deaths(target_id);
+	new map_timeleft_sec = get_timeleft();
+	new event_unix = get_systime();
+
+	new json[1024];
+	new json_len = 0;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "{")) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"type^":^"moment_vote^",")) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"type_code^":%i,", WEBHOOK_TYPE_CODE_MOMENT)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"map^":^"%s^",", map_name)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"round_number^":%i,", g_round_number)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"map_timeleft_sec^":%i,", map_timeleft_sec)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"event_unix^":%i,", event_unix)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"voter_name^":^"%s^",", voter_name)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"voter_steam_id^":^"%s^",", voter_steam_id)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"voter_slot^":%i,", voter_id)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"target_name^":^"%s^",", target_name)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"target_steam_id^":^"%s^",", target_steam_id)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"target_slot^":%i,", target_id)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"target_team^":%i,", target_team)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"target_frags^":%i,", target_frags)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"target_deaths^":%i", target_deaths)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "}")) return;
+
+	ezhttp_option_set_body(options_id, json);
+	ezhttp_post(__cvar_str_list[_webhook_url], "HTTPCompleteMoment", options_id);
 }
 
 public OnDeathMsg() {
@@ -829,6 +983,19 @@ public HTTPCompleteInfo(EzHttpRequest:request_id) {
 	new data[128];
 	ezhttp_get_data(request_id, data, charsmax(data));
 	server_print("Response data(info): %s", data);
+}
+
+public HTTPCompleteMoment(EzHttpRequest:request_id) {
+	if (ezhttp_get_error_code(request_id) != EZH_OK) {
+		new error[64];
+		ezhttp_get_error_message(request_id, error, charsmax(error));
+		server_print("Response error(moment): %s", error);
+		return;
+	}
+
+	new data[128];
+	ezhttp_get_data(request_id, data, charsmax(data));
+	server_print("Response data(moment): %s", data);
 }
 
 //-----------------------------------------

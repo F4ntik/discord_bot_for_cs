@@ -24,6 +24,31 @@ ADMIN_CHANNEL_ID = None
 # Идентификатор информационного канала
 INFO_CHANNEL_ID = 
 
+# [EXPERIMENTAL] Discord-канал для WOW moments (один пост на момент, затем edit при росте stars)
+MOMENTS_CHANNEL_ID = None
+
+# [EXPERIMENTAL] Параметры агрегации WOW moments в памяти бота
+WOW_MOMENT_WINDOW_SEC = 30
+WOW_MOMENT_SESSION_IDLE_SEC = 900
+
+# [EXPERIMENTAL] HLTV RCON для определения текущей demo (status -> "Recording to ...")
+HLTV_HOST = ''
+HLTV_PORT = 27020
+HLTV_RCON_PASSWORD = ''
+HLTV_RCON_TIMEOUT_SEC = 6
+
+# [EXPERIMENTAL] MyArena URL builder
+MYARENA_HID = ''
+MYARENA_DEMO_BASE_HOST = ''  # пример: gs13.myarena.pro
+
+# [EXPERIMENTAL] FTP fallback для поиска текущей demo, если HLTV RCON недоступен
+WOW_DEMO_FTP_HOST = ''
+WOW_DEMO_FTP_PORT = 21
+WOW_DEMO_FTP_USER = ''
+WOW_DEMO_FTP_PASSWORD = ''
+WOW_DEMO_FTP_DIR = '/cstrike'
+WOW_DEMO_PREFER_FTP = True
+
 # Legacy-параметр старой pull-модели статуса (оставлен для совместимости, сейчас не используется)
 STATUS_INTERVAL = 10
 

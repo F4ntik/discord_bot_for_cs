@@ -1,20 +1,120 @@
 from bot.dbot import DBot
 from observer.observer_client import observer, Event, logger, nsroute
+from bot.wow_moments import (
+  HltvDemoResolver,
+  MomentCluster,
+  MomentState,
+  format_mmss,
+  parse_moment_vote_payload,
+)
 
 import discord
 import asyncio
 from collections import deque
+import os
+from pathlib import Path
 import time
 
 import config
 
-dbot: DBot = DBot(config.BOT_TOKEN)
+def _load_local_env_file() -> None:
+  env_path = Path(__file__).resolve().parents[1] / ".env"
+  if not env_path.exists():
+    return
+
+  try:
+    lines = env_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+  except OSError:
+    return
+
+  for raw_line in lines:
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+      continue
+    if line.startswith("export "):
+      line = line[7:].strip()
+    if "=" not in line:
+      continue
+
+    key, value = line.split("=", 1)
+    key = key.strip()
+    value = value.strip()
+    if not key:
+      continue
+
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+      value = value[1:-1]
+
+    os.environ.setdefault(key, value)
+
+
+def _cfg_or_env_str(name: str, default: str = "") -> str:
+  raw = getattr(config, name, None)
+  if raw not in (None, ""):
+    return str(raw)
+  return str(os.getenv(name, default))
+
+
+def _cfg_or_env_int(name: str, default: int) -> int:
+  raw = getattr(config, name, None)
+  if raw in (None, ""):
+    raw = os.getenv(name, "")
+
+  try:
+    return int(raw)
+  except (TypeError, ValueError):
+    return int(default)
+
+
+def _to_bool(raw, default: bool) -> bool:
+  if isinstance(raw, bool):
+    return raw
+  if raw in (None, ""):
+    return default
+  value = str(raw).strip().lower()
+  if value in {"1", "true", "yes", "y", "on"}:
+    return True
+  if value in {"0", "false", "no", "n", "off"}:
+    return False
+  return default
+
+
+def _cfg_or_env_bool(name: str, default: bool) -> bool:
+  raw = getattr(config, name, None)
+  if raw in (None, ""):
+    raw = os.getenv(name, "")
+  return _to_bool(raw, default)
+
+
+_load_local_env_file()
+
+dbot: DBot = DBot(_cfg_or_env_str("BOT_TOKEN", ""))
 
 cs_chat_duser_msg: bool = False
 cs_chat_max_chars: int = 1000
 cs_chat_last_message: discord.Message = None
 
 cs_status_message: discord.Message = None
+moment_messages: dict[int, discord.Message] = {}
+moments_channel_id = _cfg_or_env_int("MOMENTS_CHANNEL_ID", 0)
+moment_state = MomentState(
+  window_sec=_cfg_or_env_int("WOW_MOMENT_WINDOW_SEC", 30),
+  session_idle_sec=_cfg_or_env_int("WOW_MOMENT_SESSION_IDLE_SEC", 900),
+)
+demo_resolver = HltvDemoResolver(
+  host=_cfg_or_env_str("HLTV_HOST", ""),
+  port=_cfg_or_env_int("HLTV_PORT", 27020),
+  password=_cfg_or_env_str("HLTV_RCON_PASSWORD", ""),
+  timeout_sec=_cfg_or_env_int("HLTV_RCON_TIMEOUT_SEC", 6),
+  myarena_host=_cfg_or_env_str("MYARENA_DEMO_BASE_HOST", ""),
+  myarena_hid=_cfg_or_env_str("MYARENA_HID", ""),
+  ftp_host=_cfg_or_env_str("WOW_DEMO_FTP_HOST", ""),
+  ftp_port=_cfg_or_env_int("WOW_DEMO_FTP_PORT", 21),
+  ftp_user=_cfg_or_env_str("WOW_DEMO_FTP_USER", ""),
+  ftp_password=_cfg_or_env_str("WOW_DEMO_FTP_PASSWORD", ""),
+  ftp_demo_dir=_cfg_or_env_str("WOW_DEMO_FTP_DIR", "/cstrike"),
+  prefer_ftp=_cfg_or_env_bool("WOW_DEMO_PREFER_FTP", True),
+)
 
 # Буфер для накопления сообщений из CS
 cs_message_buffer = deque()
@@ -122,6 +222,83 @@ async def send_status_message(message: str, channel: discord.TextChannel):
     logger.error(f"Dbot: Ошибка при отправке CS_STATUS в Discord: {err}")
     cs_status_message = None
 
+# -- get_moments_channel
+async def get_moments_channel() -> discord.TextChannel | None:
+  channel_id = moments_channel_id
+  if channel_id <= 0:
+    return None
+
+  channel = dbot.bot.get_channel(channel_id)
+  if channel is None:
+    try:
+      channel = await dbot.bot.fetch_channel(channel_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as err:
+      logger.error(f"DBot: MOMENTS_CHANNEL_ID={channel_id} недоступен: {err}")
+      return None
+
+  if isinstance(channel, discord.TextChannel):
+    return channel
+
+  logger.error(f"DBot: MOMENTS_CHANNEL_ID={channel_id} не является текстовым каналом")
+  return None
+
+
+# -- format_moment_message
+def format_moment_message(cluster: MomentCluster) -> str:
+  lines = [
+    "WOW moment",
+    f"Player: **{cluster.target_name}**",
+    f"Stars: **x{cluster.stars}**",
+    f"K/D: `{cluster.target_frags}/{cluster.target_deaths}`",
+    f"Map: `{cluster.map_name}` | Round: `{cluster.round_number}`",
+    f"Time left: `{format_mmss(cluster.map_timeleft_sec)}`",
+  ]
+
+  if cluster.demo_url:
+    lines.append(f"Demo: {cluster.demo_url}")
+  else:
+    lines.append("Demo: unavailable")
+
+  return "\n".join(lines)
+
+
+# -- upsert_moment_message
+async def upsert_moment_message(cluster: MomentCluster) -> None:
+  channel = await get_moments_channel()
+  if not channel:
+    logger.error("DBot: MOMENTS_CHANNEL_ID не настроен или недоступен")
+    return
+
+  if not cluster.demo_url:
+    cluster.demo_url = await demo_resolver.resolve_demo_url(cluster.map_name)
+
+  content = format_moment_message(cluster)
+  cached_message = moment_messages.get(cluster.cluster_id)
+
+  if cached_message is None and cluster.discord_message_id:
+    try:
+      cached_message = await channel.fetch_message(cluster.discord_message_id)
+      moment_messages[cluster.cluster_id] = cached_message
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+      cached_message = None
+
+  if cached_message is None:
+    try:
+      created = await channel.send(content)
+      cluster.discord_message_id = created.id
+      moment_messages[cluster.cluster_id] = created
+      return
+    except (discord.Forbidden, discord.HTTPException) as err:
+      logger.error(f"DBot: не удалось отправить WOW-момент в Discord: {err}")
+      return
+
+  try:
+    edited = await cached_message.edit(content=content)
+    moment_messages[cluster.cluster_id] = edited
+    cluster.discord_message_id = edited.id
+  except (discord.Forbidden, discord.HTTPException) as err:
+    logger.error(f"DBot: не удалось обновить WOW-момент в Discord: {err}")
+
 # !SECTION
 
 # -- (route) get_member
@@ -159,6 +336,18 @@ async def ev_info(data) -> None:
   global cs_status_message
 
   info_message = data['info_message']
+  map_name = data.get("map_name")
+  round_number = data.get("round_number", 0)
+
+  if map_name:
+    if moment_state.touch_info(map_name, round_number):
+      moment_messages.clear()
+      logger.info(
+        "DBot: WOW moments session reset by info snapshot (map=%s round=%s)",
+        map_name,
+        round_number,
+      )
+
   channel = dbot.bot.get_channel(config.INFO_CHANNEL_ID)
 
   if not channel:
@@ -169,6 +358,38 @@ async def ev_info(data) -> None:
     await edit_status_message(info_message, channel)
   else:
     await send_status_message(info_message, channel)
+
+
+@observer.subscribe(Event.WBH_MOMENT_VOTE)
+async def ev_moment_vote(data) -> None:
+  payload = data.get("moment_vote", {})
+  vote = parse_moment_vote_payload(payload)
+  if vote is None:
+    logger.error("DBot: WOW moment payload rejected: %r", payload)
+    return
+
+  result = moment_state.process_vote(vote)
+  if result.session_reset:
+    moment_messages.clear()
+    logger.info("DBot: WOW moments session reset on vote (map=%s)", vote.map_name)
+
+  if result.duplicate_vote:
+    logger.info(
+      "DBot: WOW duplicate vote ignored: map=%s voter=%s target=%s",
+      vote.map_name,
+      vote.voter_name,
+      vote.target_name,
+    )
+    return
+
+  await upsert_moment_message(result.cluster)
+  logger.info(
+    "DBot: WOW moment %s: map=%s target=%s stars=%s",
+    "created" if result.created else "updated",
+    result.cluster.map_name,
+    result.cluster.target_name,
+    result.cluster.stars,
+  )
 
 # -- ev_message_from_dis
 @observer.subscribe(Event.BE_MESSAGE)

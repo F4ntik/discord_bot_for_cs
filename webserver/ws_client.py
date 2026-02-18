@@ -314,7 +314,9 @@ async def handle_info(data):
 
     await observer.notify(Event.WBH_INFO, {
       "info_message": formatted_info,
-      "current_players": current_players
+      "current_players": current_players,
+      "map_name": map_name,
+      "round_number": round_number,
     })
   except Exception as err:
     logger.exception(f"Ошибка обработки webhook info: {err}")
@@ -325,6 +327,7 @@ async def handle_info(data):
 class WebHooksType(Enum):
   Message = 'message'
   Info = 'info'
+  MomentVote = 'moment_vote'
 
   # Deprecated
   # Notify = 'notify' 
@@ -424,6 +427,8 @@ async def handle_webhook(request: web.Request):
       logger.exception(f"Ошибка обработки webhook message: {err}")
   elif message_type == WebHooksType.Info.value:
     await handle_info(data)
+  elif message_type == WebHooksType.MomentVote.value:
+    await handle_moment_vote(data)
 
   return web.Response(text='OK')
 
@@ -441,3 +446,36 @@ async def ev_ip_not_allowed(data):
     data.get("request_content_type"),
     data.get("request_user_agent"),
   )
+
+
+async def handle_moment_vote(data):
+  try:
+    map_name = str(data.get("map", "")).strip()
+    voter_name = str(data.get("voter_name", "")).strip()
+    target_name = str(data.get("target_name", "")).strip()
+    round_number = _safe_int(data.get("round_number"), 0)
+    map_timeleft_sec = _safe_int(data.get("map_timeleft_sec"), -1)
+
+    if not map_name or not voter_name or not target_name:
+      logger.error(
+        "Webhook moment_vote bad payload: map=%r voter=%r target=%r",
+        map_name,
+        voter_name,
+        target_name,
+      )
+      return
+
+    logger.info(
+      "Webhook moment_vote received: map=%s voter=%s target=%s round=%s timeleft=%s",
+      map_name,
+      voter_name,
+      target_name,
+      round_number,
+      map_timeleft_sec,
+    )
+
+    await observer.notify(Event.WBH_MOMENT_VOTE, {
+      "moment_vote": data,
+    })
+  except Exception as err:
+    logger.exception(f"Ошибка обработки webhook moment_vote: {err}")
