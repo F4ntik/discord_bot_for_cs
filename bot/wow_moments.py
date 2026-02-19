@@ -16,6 +16,8 @@ from rehlds.rcon import RCON
 _RECORDING_RE = re.compile(r"recording to\s+\"?([^\",\r\n]+?\.dem)\"?", re.IGNORECASE)
 _MAP_SUFFIX_MODE_RE = re.compile(r"_\d+x\d+$", re.IGNORECASE)
 _DEMO_WITH_STAMP_RE = re.compile(r"(?:^|[-_])\d{10}-(.+)$", re.IGNORECASE)
+_MOMENT_KIND_WOW = "wow"
+_MOMENT_KIND_LOL = "lol"
 _log = logging.getLogger(__name__)
 
 
@@ -39,17 +41,32 @@ def format_mmss(seconds: int) -> str:
   return f"{minutes:02d}:{secs:02d}"
 
 
-def format_stars_emoji(stars: int, *, preview_limit: int = 10) -> str:
-  stars_value = max(0, _safe_int(stars, 0))
+def format_count_emoji(value: int, icon: str, *, preview_limit: int = 10) -> str:
+  value_int = max(0, _safe_int(value, 0))
   limit = max(1, _safe_int(preview_limit, 10))
-  if stars_value <= 0:
+  if value_int <= 0:
     return "—"
 
-  visible = min(stars_value, limit)
-  icons = "⭐" * visible
-  if stars_value > limit:
-    return f"{icons} x{stars_value}"
+  visible = min(value_int, limit)
+  icons = icon * visible
+  if value_int > limit:
+    return f"{icons} x{value_int}"
   return icons
+
+
+def format_stars_emoji(stars: int, *, preview_limit: int = 10) -> str:
+  return format_count_emoji(stars, "⭐", preview_limit=preview_limit)
+
+
+def format_clowns_emoji(clowns: int, *, preview_limit: int = 10) -> str:
+  return format_count_emoji(clowns, "🤡", preview_limit=preview_limit)
+
+
+def normalize_moment_kind(moment_kind: str) -> str:
+  value = _safe_str(moment_kind).strip().lower()
+  if value == _MOMENT_KIND_LOL:
+    return _MOMENT_KIND_LOL
+  return _MOMENT_KIND_WOW
 
 
 def normalize_map_name_for_match(map_name: str) -> str:
@@ -184,6 +201,7 @@ def build_myarena_demo_url(base_host: str, hid: str, demo_path: str) -> Optional
 
 @dataclass
 class MomentVote:
+  moment_kind: str
   map_name: str
   round_number: int
   map_timeleft_sec: int
@@ -227,8 +245,10 @@ def parse_moment_vote_payload(data: dict) -> Optional[MomentVote]:
   event_unix = _safe_int(data.get("event_unix"), int(time.time()))
   if event_unix <= 0:
     event_unix = int(time.time())
+  moment_kind = normalize_moment_kind(_safe_str(data.get("moment_kind"), _MOMENT_KIND_WOW))
 
   return MomentVote(
+    moment_kind=moment_kind,
     map_name=map_name,
     round_number=max(0, _safe_int(data.get("round_number"), 0)),
     map_timeleft_sec=max(-1, _safe_int(data.get("map_timeleft_sec"), -1)),
@@ -249,6 +269,7 @@ def parse_moment_vote_payload(data: dict) -> Optional[MomentVote]:
 @dataclass
 class MomentCluster:
   cluster_id: int
+  moment_kind: str
   map_name: str
   target_key: str
   target_name: str
@@ -367,6 +388,8 @@ class MomentState:
     vote_map_norm = normalize_map_name_for_match(vote.map_name)
 
     for cluster in self._clusters:
+      if cluster.moment_kind != vote.moment_kind:
+        continue
       if normalize_map_name_for_match(cluster.map_name) != vote_map_norm:
         continue
       if cluster.target_key != vote.target_key:
@@ -409,6 +432,7 @@ class MomentState:
 
     cluster = MomentCluster(
       cluster_id=self._next_cluster_id,
+      moment_kind=vote.moment_kind,
       map_name=vote.map_name,
       target_key=vote.target_key,
       target_name=vote.target_name,

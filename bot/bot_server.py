@@ -4,8 +4,10 @@ from bot.wow_moments import (
   HltvDemoResolver,
   MomentCluster,
   MomentState,
+  format_clowns_emoji,
   format_mmss,
   format_stars_emoji,
+  normalize_moment_kind,
   normalize_map_name_for_match,
   parse_moment_vote_payload,
 )
@@ -264,11 +266,19 @@ def format_moment_voters(cluster: MomentCluster) -> str:
 
 
 def format_moment_message(cluster: MomentCluster) -> str:
+  moment_kind = normalize_moment_kind(cluster.moment_kind)
   map_name = normalize_map_name_for_match(cluster.map_name) or cluster.map_name
+  if moment_kind == "lol":
+    title = "🤡 Кринж-момент"
+    score_line = f"Клоуны: {format_clowns_emoji(cluster.stars)}"
+  else:
+    title = "🔥 WOW-момент"
+    score_line = f"Звезды: {format_stars_emoji(cluster.stars)}"
+
   lines = [
-    "WOW-момент",
+    title,
     f"Игрок: **{cluster.target_name}**",
-    f"Звезды: {format_stars_emoji(cluster.stars)}",
+    score_line,
     f"Кто отметил: {format_moment_voters(cluster)}",
     f"K/D: `{cluster.target_frags}/{cluster.target_deaths}`",
     f"Карта: `{map_name}` | Раунд: `{cluster.round_number}`",
@@ -509,17 +519,18 @@ async def ev_moment_vote(data) -> None:
   payload = data.get("moment_vote", {})
   vote = parse_moment_vote_payload(payload)
   if vote is None:
-    logger.error("DBot: WOW moment payload rejected: %r", payload)
+    logger.error("DBot: moment payload rejected: %r", payload)
     return
 
   result = moment_state.process_vote(vote)
   if result.session_reset:
     moment_messages.clear()
-    logger.info("DBot: WOW moments session reset on vote (map=%s)", vote.map_name)
+    logger.info("DBot: moments session reset on vote (kind=%s map=%s)", vote.moment_kind, vote.map_name)
 
   if result.duplicate_vote:
     logger.info(
-      "DBot: WOW duplicate vote ignored: map=%s voter=%s target=%s",
+      "DBot: duplicate moment vote ignored: kind=%s map=%s voter=%s target=%s",
+      vote.moment_kind,
       vote.map_name,
       vote.voter_name,
       vote.target_name,
@@ -528,8 +539,9 @@ async def ev_moment_vote(data) -> None:
 
   await upsert_moment_message(result.cluster)
   logger.info(
-    "DBot: WOW moment %s: map=%s target=%s stars=%s",
+    "DBot: moment %s: kind=%s map=%s target=%s reactions=%s",
     "created" if result.created else "updated",
+    result.cluster.moment_kind,
     result.cluster.map_name,
     result.cluster.target_name,
     result.cluster.stars,

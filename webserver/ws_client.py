@@ -450,6 +450,9 @@ async def ev_ip_not_allowed(data):
 
 async def handle_moment_vote(data):
   try:
+    moment_kind = str(data.get("moment_kind", "wow")).strip().lower()
+    if moment_kind != "lol":
+      moment_kind = "wow"
     map_name = str(data.get("map", "")).strip()
     voter_name = str(data.get("voter_name", "")).strip()
     target_name = str(data.get("target_name", "")).strip()
@@ -466,7 +469,8 @@ async def handle_moment_vote(data):
       return
 
     logger.info(
-      "Webhook moment_vote received: map=%s voter=%s target=%s round=%s timeleft=%s",
+      "Webhook moment_vote received: kind=%s map=%s voter=%s target=%s round=%s timeleft=%s",
+      moment_kind,
       map_name,
       voter_name,
       target_name,

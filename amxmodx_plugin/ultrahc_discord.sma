@@ -10,7 +10,7 @@
 #pragma dynamic 32768
 
 #define PLUGIN_NAME 		"ULTRAHC Discord hooks"
-#define PLUGIN_VERSION 	"0.5.0"
+#define PLUGIN_VERSION 	"0.5.1"
 #define PLUGIN_AUTHOR 	"Asura, Mep3ocTb"
 
 //-----------------------------------------
@@ -43,6 +43,7 @@
 #define WOW_MOMENT_ENABLED 1
 #define WOW_MOMENT_VOTE_COOLDOWN_SEC 3.0
 #define WOW_MOMENT_MENU_TITLE "Who made WOW moment?"
+#define LOL_MOMENT_MENU_TITLE "Who made LOL moment?"
 
 #define MAPS_OUTPUT_BEGIN "ULTRAHC_MAPS_BEGIN"
 #define MAPS_OUTPUT_END "ULTRAHC_MAPS_END"
@@ -91,6 +92,12 @@ new g_score_ct = 0;
 new g_planted_bomb_slot = 0;
 new g_planted_bomb_steam_id[64];
 new Float:g_wow_last_vote_time[33];
+new g_moment_kind_by_voter[33];
+
+enum EMomentKind {
+	MOMENT_KIND_WOW = 0,
+	MOMENT_KIND_LOL
+}
 
 // new big_string[5000];
 
@@ -256,8 +263,9 @@ public SayMessageHandler(owner_id) {
 	trim(con_cmd_text);
 
 	#if WOW_MOMENT_ENABLED
-		if(IsWowTrigger(con_cmd_text)) {
-			HandleWowMomentCommand(owner_id);
+		new moment_kind = GetMomentKindFromTrigger(con_cmd_text);
+		if(moment_kind >= 0) {
+			HandleMomentCommand(owner_id, moment_kind);
 			return PLUGIN_HANDLED;
 		}
 	#endif
@@ -375,29 +383,79 @@ public MessageModeCallback(owner_id) {
 	return PLUGIN_HANDLED;
 }
 
-stock bool:IsWowTrigger(const text[]) {
-	if(!text[0]) return false;
+stock GetMomentKindFromTrigger(const text[]) {
+	if(!text[0]) return -1;
 
-	return (
+	if(
 		equali(text, "omg")
 		|| equali(text, "/omg")
 		|| equali(text, "!omg")
-	);
+	) {
+		return MOMENT_KIND_WOW;
+	}
+
+	if(
+		equali(text, "lol")
+		|| equali(text, "/lol")
+		|| equali(text, "!lol")
+	) {
+		return MOMENT_KIND_LOL;
+	}
+
+	return -1;
 }
 
-HandleWowMomentCommand(voter_id) {
+stock bool:IsValidMomentKind(moment_kind) {
+	return (moment_kind == MOMENT_KIND_WOW || moment_kind == MOMENT_KIND_LOL);
+}
+
+stock GetMomentKindName(moment_kind, output[], output_len) {
+	if(moment_kind == MOMENT_KIND_LOL) {
+		copy(output, output_len, "lol");
+		return;
+	}
+	copy(output, output_len, "wow");
+}
+
+stock GetMomentKindLabel(moment_kind, output[], output_len) {
+	if(moment_kind == MOMENT_KIND_LOL) {
+		copy(output, output_len, "LOL");
+		return;
+	}
+	copy(output, output_len, "WOW");
+}
+
+stock GetMomentMenuTitle(moment_kind, output[], output_len) {
+	if(moment_kind == MOMENT_KIND_LOL) {
+		copy(output, output_len, LOL_MOMENT_MENU_TITLE);
+		return;
+	}
+	copy(output, output_len, WOW_MOMENT_MENU_TITLE);
+}
+
+HandleMomentCommand(voter_id, moment_kind) {
 	if(!is_user_connected(voter_id) || is_user_bot(voter_id) || is_user_hltv(voter_id)) {
 		return;
 	}
 
+	if(!IsValidMomentKind(moment_kind)) {
+		moment_kind = MOMENT_KIND_WOW;
+	}
+
+	new moment_label[8];
+	GetMomentKindLabel(moment_kind, moment_label, charsmax(moment_label));
+
 	new Float:now = get_gametime();
 	if(now - g_wow_last_vote_time[voter_id] < WOW_MOMENT_VOTE_COOLDOWN_SEC) {
-		client_print(voter_id, print_chat, "[Discord] WOW cooldown active");
+		client_print(voter_id, print_chat, "[Discord] %s cooldown active", moment_label);
 		return;
 	}
 	g_wow_last_vote_time[voter_id] = now;
+	g_moment_kind_by_voter[voter_id] = moment_kind;
 
-	new menu = menu_create(WOW_MOMENT_MENU_TITLE, "WowMomentMenuHandler");
+	new menu_title[64];
+	GetMomentMenuTitle(moment_kind, menu_title, charsmax(menu_title));
+	new menu = menu_create(menu_title, "WowMomentMenuHandler");
 	if(!menu) {
 		return;
 	}
@@ -422,7 +480,7 @@ HandleWowMomentCommand(voter_id) {
 
 	if(!added) {
 		menu_destroy(menu);
-		client_print(voter_id, print_chat, "[Discord] WOW target list is empty");
+		client_print(voter_id, print_chat, "[Discord] %s target list is empty", moment_label);
 		return;
 	}
 
@@ -436,6 +494,14 @@ public WowMomentMenuHandler(voter_id, menu, item) {
 		return PLUGIN_HANDLED;
 	}
 
+	new moment_kind = g_moment_kind_by_voter[voter_id];
+	if(!IsValidMomentKind(moment_kind)) {
+		moment_kind = MOMENT_KIND_WOW;
+	}
+
+	new moment_label[8];
+	GetMomentKindLabel(moment_kind, moment_label, charsmax(moment_label));
+
 	new info[8];
 	new player_name[MAX_NAME_LENGTH];
 	new access, callback;
@@ -443,22 +509,22 @@ public WowMomentMenuHandler(voter_id, menu, item) {
 
 	new target_id = str_to_num(info);
 	if(!is_user_connected(target_id) || is_user_bot(target_id) || is_user_hltv(target_id)) {
-		client_print(voter_id, print_chat, "[Discord] WOW target is no longer online");
+		client_print(voter_id, print_chat, "[Discord] %s target is no longer online", moment_label);
 		menu_destroy(menu);
 		return PLUGIN_HANDLED;
 	}
 
-	SendWowMomentWebhook(voter_id, target_id);
-	client_print(voter_id, print_chat, "[Discord] WOW vote sent for %s", player_name);
+	SendMomentWebhook(voter_id, target_id, moment_kind);
+	client_print(voter_id, print_chat, "[Discord] %s vote sent for %s", moment_label, player_name);
 
 	menu_destroy(menu);
 	return PLUGIN_HANDLED;
 }
 
-SendWowMomentWebhook(voter_id, target_id) {
+SendMomentWebhook(voter_id, target_id, moment_kind) {
 	new EzHttpOptions:options_id = ezhttp_create_options();
 	if(!options_id) {
-		server_print("[ultrahc_discord] wow webhook build failed: options alloc");
+		server_print("[ultrahc_discord] moment webhook build failed: options alloc");
 		return;
 	}
 
@@ -470,11 +536,13 @@ SendWowMomentWebhook(voter_id, target_id) {
 	new target_name[MAX_NAME_LENGTH];
 	new target_steam_id[64];
 	new map_name[32];
+	new moment_kind_name[8];
 	get_user_name(voter_id, voter_name, charsmax(voter_name));
 	get_user_authid(voter_id, voter_steam_id, charsmax(voter_steam_id));
 	get_user_name(target_id, target_name, charsmax(target_name));
 	get_user_authid(target_id, target_steam_id, charsmax(target_steam_id));
 	get_mapname(map_name, charsmax(map_name));
+	GetMomentKindName(moment_kind, moment_kind_name, charsmax(moment_kind_name));
 
 	replace_all(voter_name, charsmax(voter_name), "\\", "\\\\");
 	replace_all(voter_name, charsmax(voter_name), "^"", "'");
@@ -499,6 +567,7 @@ SendWowMomentWebhook(voter_id, target_id) {
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "{")) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"type^":^"moment_vote^",")) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"type_code^":%i,", WEBHOOK_TYPE_CODE_MOMENT)) return;
+	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"moment_kind^":^"%s^",", moment_kind_name)) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"map^":^"%s^",", map_name)) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"round_number^":%i,", g_round_number)) return;
 	if(!TryAppendJsonf(json, sizeof(json), json_len, "^"map_timeleft_sec^":%i,", map_timeleft_sec)) return;

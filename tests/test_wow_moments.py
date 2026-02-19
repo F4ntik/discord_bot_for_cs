@@ -11,9 +11,11 @@ from bot.wow_moments import (
   HltvDemoResolver,
   MomentState,
   build_myarena_demo_url,
+  format_clowns_emoji,
   extract_map_from_demo_path,
   format_stars_emoji,
   is_demo_map_compatible,
+  normalize_moment_kind,
   normalize_map_name_for_match,
   parse_hltv_recording_path,
   parse_moment_vote_payload,
@@ -48,6 +50,18 @@ def test_parse_moment_vote_payload_requires_core_fields():
   assert parse_moment_vote_payload(_vote_payload(voter_name="")) is None
   assert parse_moment_vote_payload(_vote_payload(target_name="")) is None
   assert parse_moment_vote_payload(_vote_payload()) is not None
+
+
+def test_parse_moment_vote_payload_defaults_kind_to_wow():
+  vote = parse_moment_vote_payload(_vote_payload())
+  assert vote is not None
+  assert vote.moment_kind == "wow"
+
+
+def test_parse_moment_vote_payload_accepts_lol_kind():
+  vote = parse_moment_vote_payload(_vote_payload(moment_kind="lol"))
+  assert vote is not None
+  assert vote.moment_kind == "lol"
 
 
 def test_moment_state_deduplicates_same_voter():
@@ -117,6 +131,26 @@ def test_moment_state_aggregates_votes_with_map_suffix_variants():
   second = state.process_vote(vote_b)
   assert first.cluster.cluster_id == second.cluster.cluster_id
   assert second.cluster.stars == 2
+
+
+def test_moment_state_separates_wow_and_lol_clusters():
+  state = MomentState(window_sec=30, session_idle_sec=900)
+  wow_vote = parse_moment_vote_payload(_vote_payload(moment_kind="wow", event_unix=1_700_000_000))
+  lol_vote = parse_moment_vote_payload(
+    _vote_payload(
+      moment_kind="lol",
+      voter_name="Petya",
+      voter_steam_id="STEAM_0:1:12",
+      voter_slot=12,
+      event_unix=1_700_000_010,
+    )
+  )
+  assert wow_vote is not None
+  assert lol_vote is not None
+
+  first = state.process_vote(wow_vote)
+  second = state.process_vote(lol_vote)
+  assert first.cluster.cluster_id != second.cluster.cluster_id
 
 
 def test_parse_hltv_recording_path_from_status():
@@ -248,3 +282,16 @@ def test_format_stars_emoji_compact():
 def test_format_stars_emoji_with_cap_and_suffix():
   assert format_stars_emoji(11) == "⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐ x11"
   assert format_stars_emoji(25) == "⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐ x25"
+
+def test_format_clowns_emoji_with_cap_and_suffix():
+  one = format_clowns_emoji(1)
+  assert one != "—"
+  assert format_clowns_emoji(10) == one * 10
+  assert format_clowns_emoji(12) == f"{one * 10} x12"
+
+
+def test_normalize_moment_kind():
+  assert normalize_moment_kind("wow") == "wow"
+  assert normalize_moment_kind("lol") == "lol"
+  assert normalize_moment_kind(" LOL ") == "lol"
+  assert normalize_moment_kind("oops") == "wow"
