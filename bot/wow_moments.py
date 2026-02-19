@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 from ftplib import FTP
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from rehlds.rcon import RCON
 _RECORDING_RE = re.compile(r"recording to\s+\"?([^\",\r\n]+?\.dem)\"?", re.IGNORECASE)
 _MAP_SUFFIX_MODE_RE = re.compile(r"_\d+x\d+$", re.IGNORECASE)
 _DEMO_WITH_STAMP_RE = re.compile(r"(?:^|[-_])\d{10}-(.+)$", re.IGNORECASE)
+_log = logging.getLogger(__name__)
 
 
 def _safe_int(value, default=0) -> int:
@@ -297,6 +299,7 @@ class MomentState:
     self.window_sec = max(1, int(window_sec))
     self.session_idle_sec = max(60, int(session_idle_sec))
     self._map_name = ""
+    self._map_norm_name = ""
     self._last_round_number = 0
     self._last_event_unix = 0
     self._clusters: list[MomentCluster] = []
@@ -304,6 +307,7 @@ class MomentState:
 
   def reset(self) -> None:
     self._map_name = ""
+    self._map_norm_name = ""
     self._last_round_number = 0
     self._last_event_unix = 0
     self._clusters = []
@@ -312,15 +316,16 @@ class MomentState:
   def touch_info(self, map_name: str, round_number: int, event_unix: Optional[int] = None) -> bool:
     now = int(event_unix or time.time())
     map_name = _safe_str(map_name).strip()
+    map_norm = normalize_map_name_for_match(map_name)
     round_number = max(0, _safe_int(round_number, 0))
     if not map_name:
       return False
 
     should_reset = False
-    if self._map_name and map_name != self._map_name:
+    if self._map_norm_name and map_norm != self._map_norm_name:
       should_reset = True
     elif (
-      self._map_name == map_name
+      self._map_norm_name == map_norm
       and self._last_round_number >= 3
       and round_number > 0
       and round_number + 2 < self._last_round_number
@@ -331,15 +336,17 @@ class MomentState:
       self.reset()
 
     self._map_name = map_name
+    self._map_norm_name = map_norm
     self._last_round_number = round_number
     self._last_event_unix = now
     return should_reset
 
   def _should_reset_for_vote(self, vote: MomentVote) -> bool:
-    if not self._map_name:
+    vote_map_norm = normalize_map_name_for_match(vote.map_name)
+    if not self._map_norm_name:
       return False
 
-    if vote.map_name != self._map_name:
+    if vote_map_norm != self._map_norm_name:
       return True
 
     if self._last_event_unix and (vote.event_unix - self._last_event_unix) > self.session_idle_sec:
@@ -357,9 +364,10 @@ class MomentState:
   def _find_cluster(self, vote: MomentVote) -> Optional[MomentCluster]:
     best_cluster = None
     best_distance = None
+    vote_map_norm = normalize_map_name_for_match(vote.map_name)
 
     for cluster in self._clusters:
-      if cluster.map_name != vote.map_name:
+      if normalize_map_name_for_match(cluster.map_name) != vote_map_norm:
         continue
       if cluster.target_key != vote.target_key:
         continue
@@ -381,6 +389,7 @@ class MomentState:
       session_reset = True
 
     self._map_name = vote.map_name
+    self._map_norm_name = normalize_map_name_for_match(vote.map_name)
     self._last_round_number = vote.round_number
     self._last_event_unix = vote.event_unix
 
@@ -431,6 +440,11 @@ class DemoResolveResult:
   demo_url: Optional[str] = None
   demo_path: Optional[str] = None
   map_mismatch: bool = False
+  source: str = ""
+  map_expected: str = ""
+  map_found: str = ""
+  reason: str = ""
+  attempted_sources: list[str] = field(default_factory=list)
 
 
 class HltvDemoResolver:
@@ -514,6 +528,7 @@ class HltvDemoResolver:
     return filename
 
   def _fetch_ftp_demo_path_sync(self, map_name: str = "") -> Optional[str]:
+    map_name = normalize_map_name_for_match(map_name)
     ftp = FTP()
     ftp.connect(self.ftp_host, self.ftp_port, timeout=self.timeout_sec)
     ftp.login(self.ftp_user, self.ftp_password)
@@ -532,9 +547,32 @@ class HltvDemoResolver:
           modified_at = 0
         candidates.append((name, modified_at))
 
+      total_candidates = len(candidates)
+      map_matches_count = (
+        sum(1 for name, _ in candidates if is_demo_map_compatible(map_name, name))
+        if map_name
+        else total_candidates
+      )
+
       chosen = pick_ftp_demo_filename(candidates, map_name=map_name)
       if not chosen:
+        _log.info(
+          "WOW demo resolve: FTP no suitable demo: dir=%s total_candidates=%s map_expected=%s map_matches=%s",
+          self.ftp_demo_dir,
+          total_candidates,
+          map_name or "-",
+          map_matches_count,
+        )
         return None
+
+      _log.info(
+        "WOW demo resolve: FTP candidate selected: dir=%s total_candidates=%s map_expected=%s map_matches=%s chosen=%s",
+        self.ftp_demo_dir,
+        total_candidates,
+        map_name or "-",
+        map_matches_count,
+        chosen,
+      )
       return self._build_demo_path_from_ftp(chosen)
     finally:
       try:
@@ -548,15 +586,25 @@ class HltvDemoResolver:
 
     try:
       status_text = await asyncio.to_thread(self._fetch_status_sync)
-    except Exception:
+    except Exception as err:
+      _log.warning("WOW demo resolve: HLTV status failed: host=%s port=%s error=%s", self.host, self.port, err)
       return None
 
     demo_path = parse_hltv_recording_path(status_text)
     if not demo_path:
+      _log.info("WOW demo resolve: HLTV status has no recording path")
       return None
+
+    _log.info(
+      "WOW demo resolve: HLTV candidate path=%s demo_map=%s map_expected=%s",
+      demo_path,
+      extract_map_from_demo_path(demo_path) or "-",
+      map_name or "-",
+    )
 
     demo_url = build_myarena_demo_url(self.myarena_host, self.myarena_hid, demo_path)
     if not demo_url:
+      _log.info("WOW demo resolve: HLTV demo URL build failed for path=%s", demo_path)
       return None
 
     return demo_url
@@ -567,55 +615,99 @@ class HltvDemoResolver:
 
     try:
       demo_path = await asyncio.to_thread(self._fetch_ftp_demo_path_sync, map_name)
-    except Exception:
+    except Exception as err:
+      _log.warning(
+        "WOW demo resolve: FTP lookup failed: host=%s port=%s dir=%s error=%s",
+        self.ftp_host,
+        self.ftp_port,
+        self.ftp_demo_dir,
+        err,
+      )
       return None
 
     if not demo_path:
+      _log.info("WOW demo resolve: FTP lookup returned no demo path for map=%s", map_name)
       return None
 
     demo_url = build_myarena_demo_url(self.myarena_host, self.myarena_hid, demo_path)
     if not demo_url:
+      _log.info("WOW demo resolve: FTP demo URL build failed for path=%s", demo_path)
       return None
 
     return demo_url
 
   async def resolve_demo(self, map_name: str = "", *, force_refresh: bool = False) -> DemoResolveResult:
+    expected_map = normalize_map_name_for_match(map_name)
     if not self.enabled:
-      return DemoResolveResult()
+      return DemoResolveResult(map_expected=expected_map, reason="resolver_disabled")
 
     now = time.monotonic()
-    map_name = normalize_map_name_for_match(map_name)
+    map_name = expected_map
 
     if not force_refresh and self._cache_url and (now - self._cache_at) <= self.cache_ttl_sec:
       if not map_name or is_demo_map_compatible(map_name, _safe_str(self._cache_path)):
-        return DemoResolveResult(demo_url=self._cache_url, demo_path=self._cache_path)
+        return DemoResolveResult(
+          demo_url=self._cache_url,
+          demo_path=self._cache_path,
+          source="cache",
+          map_expected=expected_map,
+          map_found=extract_map_from_demo_path(_safe_str(self._cache_path)),
+          reason="cache_hit",
+          attempted_sources=["cache"],
+        )
 
-    ordered_resolvers = (
-      (self._resolve_via_ftp, self._resolve_via_hltv)
+    ordered_resolvers: tuple[tuple[str, callable], ...] = (
+      (("ftp", self._resolve_via_ftp), ("hltv", self._resolve_via_hltv))
       if self.prefer_ftp
-      else (self._resolve_via_hltv, self._resolve_via_ftp)
+      else (("hltv", self._resolve_via_hltv), ("ftp", self._resolve_via_ftp))
     )
 
-    mismatch_detected = False
-    for resolver in ordered_resolvers:
+    attempted_sources: list[str] = []
+    mismatch_result: Optional[DemoResolveResult] = None
+
+    for source_name, resolver in ordered_resolvers:
+      attempted_sources.append(source_name)
       demo_url = await resolver(map_name)
       if not demo_url:
         continue
 
       demo_path = unquote(demo_url.split("&dem=", 1)[-1])
+      demo_map = extract_map_from_demo_path(demo_path)
       if map_name and demo_path and not is_demo_map_compatible(map_name, demo_path):
-        mismatch_detected = True
+        if mismatch_result is None:
+          mismatch_result = DemoResolveResult(
+            map_mismatch=True,
+            source=source_name,
+            demo_path=demo_path,
+            map_expected=expected_map,
+            map_found=demo_map,
+            reason="map_mismatch",
+            attempted_sources=attempted_sources.copy(),
+          )
         continue
 
       self._cache_path = demo_path
       self._cache_url = demo_url
       self._cache_at = now
-      return DemoResolveResult(demo_url=demo_url, demo_path=demo_path)
+      return DemoResolveResult(
+        demo_url=demo_url,
+        demo_path=demo_path,
+        source=source_name,
+        map_expected=expected_map,
+        map_found=demo_map,
+        reason="resolved",
+        attempted_sources=attempted_sources,
+      )
 
-    if mismatch_detected:
-      return DemoResolveResult(map_mismatch=True)
+    if mismatch_result is not None:
+      mismatch_result.attempted_sources = attempted_sources
+      return mismatch_result
 
-    return DemoResolveResult()
+    return DemoResolveResult(
+      map_expected=expected_map,
+      reason="no_demo_found",
+      attempted_sources=attempted_sources,
+    )
 
   async def resolve_demo_url(self, map_name: str = "", *, force_refresh: bool = False) -> Optional[str]:
     result = await self.resolve_demo(map_name, force_refresh=force_refresh)

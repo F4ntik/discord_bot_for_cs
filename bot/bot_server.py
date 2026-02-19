@@ -284,29 +284,127 @@ def format_moment_message(cluster: MomentCluster) -> str:
 
 
 async def resolve_moment_demo_url(cluster: MomentCluster) -> None:
+  map_raw = cluster.map_name
+  map_norm = normalize_map_name_for_match(map_raw)
+
   if cluster.demo_url or not demo_resolver.enabled:
+    if not demo_resolver.enabled:
+      logger.warning(
+        "DBot: WOW demo resolve skipped: resolver disabled (cluster=%s map_raw=%s map_norm=%s)",
+        cluster.cluster_id,
+        map_raw,
+        map_norm,
+      )
     return
+
+  logger.info(
+    "DBot: WOW demo resolve start: cluster=%s map_raw=%s map_norm=%s round=%s stars=%s",
+    cluster.cluster_id,
+    map_raw,
+    map_norm,
+    cluster.round_number,
+    cluster.stars,
+  )
 
   result = await demo_resolver.resolve_demo(cluster.map_name)
   if result.demo_url:
     cluster.demo_url = result.demo_url
+    logger.info(
+      "DBot: WOW demo resolved: cluster=%s source=%s demo_map=%s demo_path=%s reason=%s attempted=%s",
+      cluster.cluster_id,
+      result.source or "-",
+      result.map_found or "-",
+      result.demo_path or "-",
+      result.reason or "-",
+      ",".join(result.attempted_sources) if result.attempted_sources else "-",
+    )
     return
 
-  if not result.map_mismatch:
+  should_retry = result.map_mismatch or result.reason == "no_demo_found"
+  if not should_retry:
+    logger.info(
+      "DBot: WOW demo unresolved: cluster=%s map_raw=%s map_norm=%s reason=%s attempted=%s",
+      cluster.cluster_id,
+      map_raw,
+      map_norm,
+      result.reason or "-",
+      ",".join(result.attempted_sources) if result.attempted_sources else "-",
+    )
     return
 
   retries = max(1, WOW_DEMO_RETRY_WINDOW_SEC // WOW_DEMO_RETRY_STEP_SEC)
+  retry_reason = "map_mismatch" if result.map_mismatch else (result.reason or "unresolved")
   logger.warning(
-    "DBot: WOW demo map mismatch for map=%s, waiting up to %ss",
-    cluster.map_name,
+    "DBot: WOW demo resolve retry window started: cluster=%s reason=%s expected=%s got=%s source=%s demo_path=%s attempted=%s; waiting up to %ss",
+    cluster.cluster_id,
+    retry_reason,
+    result.map_expected or map_norm or "-",
+    result.map_found or "-",
+    result.source or "-",
+    result.demo_path or "-",
+    ",".join(result.attempted_sources) if result.attempted_sources else "-",
     WOW_DEMO_RETRY_WINDOW_SEC,
   )
-  for _ in range(retries):
+  last_result = result
+  for attempt in range(1, retries + 1):
     await asyncio.sleep(WOW_DEMO_RETRY_STEP_SEC)
     retry_result = await demo_resolver.resolve_demo(cluster.map_name, force_refresh=True)
+    last_result = retry_result
     if retry_result.demo_url:
       cluster.demo_url = retry_result.demo_url
+      logger.info(
+        "DBot: WOW demo resolved on retry %s/%s: cluster=%s source=%s demo_map=%s demo_path=%s reason=%s attempted=%s",
+        attempt,
+        retries,
+        cluster.cluster_id,
+        retry_result.source or "-",
+        retry_result.map_found or "-",
+        retry_result.demo_path or "-",
+        retry_result.reason or "-",
+        ",".join(retry_result.attempted_sources) if retry_result.attempted_sources else "-",
+      )
       return
+    if retry_result.map_mismatch:
+      logger.warning(
+        "DBot: WOW demo retry collision %s/%s: cluster=%s expected=%s got=%s source=%s demo_path=%s attempted=%s",
+        attempt,
+        retries,
+        cluster.cluster_id,
+        retry_result.map_expected or map_norm or "-",
+        retry_result.map_found or "-",
+        retry_result.source or "-",
+        retry_result.demo_path or "-",
+        ",".join(retry_result.attempted_sources) if retry_result.attempted_sources else "-",
+      )
+      continue
+    if retry_result.reason == "no_demo_found":
+      logger.info(
+        "DBot: WOW demo retry %s/%s still has no candidate: cluster=%s attempted=%s",
+        attempt,
+        retries,
+        cluster.cluster_id,
+        ",".join(retry_result.attempted_sources) if retry_result.attempted_sources else "-",
+      )
+      continue
+    logger.info(
+      "DBot: WOW demo retry %s/%s stopped: cluster=%s reason=%s attempted=%s",
+      attempt,
+      retries,
+      cluster.cluster_id,
+      retry_result.reason or "-",
+      ",".join(retry_result.attempted_sources) if retry_result.attempted_sources else "-",
+    )
+    break
+
+  logger.warning(
+    "DBot: WOW demo unresolved after retries: cluster=%s map_raw=%s map_norm=%s retry_reason=%s final_reason=%s attempted=%s",
+    cluster.cluster_id,
+    map_raw,
+    map_norm,
+    retry_reason,
+    last_result.reason or "-",
+    ",".join(last_result.attempted_sources) if last_result.attempted_sources else "-",
+  )
 
 
 # -- upsert_moment_message

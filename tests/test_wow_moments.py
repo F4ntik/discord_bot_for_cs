@@ -92,6 +92,33 @@ def test_moment_state_creates_new_cluster_outside_window():
   assert first.cluster.cluster_id != second.cluster.cluster_id
 
 
+def test_moment_state_does_not_reset_between_map_suffix_variants():
+  state = MomentState(window_sec=30, session_idle_sec=900)
+  assert state.touch_info("de_dust2", 4, event_unix=1_700_000_000) is False
+  assert state.touch_info("de_dust2_2x2", 5, event_unix=1_700_000_010) is False
+
+
+def test_moment_state_aggregates_votes_with_map_suffix_variants():
+  state = MomentState(window_sec=30, session_idle_sec=900)
+  vote_a = parse_moment_vote_payload(_vote_payload(map="de_dust2", event_unix=1_700_000_000))
+  vote_b = parse_moment_vote_payload(
+    _vote_payload(
+      map="de_dust2_2x2",
+      voter_name="Petya",
+      voter_steam_id="STEAM_0:1:12",
+      voter_slot=12,
+      event_unix=1_700_000_012,
+    )
+  )
+  assert vote_a is not None
+  assert vote_b is not None
+
+  first = state.process_vote(vote_a)
+  second = state.process_vote(vote_b)
+  assert first.cluster.cluster_id == second.cluster.cluster_id
+  assert second.cluster.stars == 2
+
+
 def test_parse_hltv_recording_path_from_status():
   status = "HLTV proxy status\nRecording to cstrike/autorec-2602170929-de_dust2.dem, Length 31.2 sec\n"
   assert parse_hltv_recording_path(status) == "cstrike/autorec-2602170929-de_dust2.dem"
@@ -171,10 +198,45 @@ def test_hltv_resolver_reports_mismatch_before_map_switch():
   first = asyncio.run(resolver.resolve_demo("de_dust2_2x2", force_refresh=True))
   assert first.demo_url is None
   assert first.map_mismatch is True
+  assert first.reason == "map_mismatch"
+  assert first.source == "hltv"
+  assert first.map_expected == "de_dust2"
+  assert first.map_found == "de_train_winter"
 
   second = asyncio.run(resolver.resolve_demo("de_dust2_2x2", force_refresh=True))
   assert second.demo_url is not None
   assert second.map_mismatch is False
+  assert second.reason == "resolved"
+
+
+def test_hltv_resolver_reports_no_demo_found_with_attempted_sources():
+  resolver = HltvDemoResolver(
+    host="127.0.0.1",
+    port=27020,
+    password="x",
+    timeout_sec=2,
+    myarena_host="gs13.myarena.pro",
+    myarena_hid="89000",
+    ftp_host="127.0.0.1",
+    ftp_port=21,
+    ftp_user="user",
+    ftp_password="pass",
+  )
+
+  async def fake_hltv(_map_name):
+    return None
+
+  async def fake_ftp(_map_name):
+    return None
+
+  resolver._resolve_via_hltv = fake_hltv  # type: ignore[method-assign]
+  resolver._resolve_via_ftp = fake_ftp  # type: ignore[method-assign]
+
+  result = asyncio.run(resolver.resolve_demo("de_dust2_2x2", force_refresh=True))
+  assert result.demo_url is None
+  assert result.reason == "no_demo_found"
+  assert result.map_expected == "de_dust2"
+  assert result.attempted_sources == ["hltv", "ftp"]
 
 
 def test_format_stars_emoji_compact():
