@@ -93,11 +93,8 @@ new g_planted_bomb_slot = 0;
 new g_planted_bomb_steam_id[64];
 new Float:g_wow_last_vote_time[33];
 new g_moment_kind_by_voter[33];
-
-enum EMomentKind {
-	MOMENT_KIND_WOW = 0,
-	MOMENT_KIND_LOL
-}
+#define MOMENT_KIND_WOW 0
+#define MOMENT_KIND_LOL 1
 
 // new big_string[5000];
 
